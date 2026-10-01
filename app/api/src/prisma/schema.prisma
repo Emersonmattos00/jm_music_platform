@@ -1,0 +1,304 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  CUSTOMER
+  ADMIN
+}
+
+enum TrackStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  CANCELLED
+  EXPIRED
+  PAST_DUE
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+enum LicenseStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum ProductType {
+  LICENSE
+  SUBSCRIPTION
+}
+
+// ============================================================
+// USERS + AUTH
+// ============================================================
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String?  @map("password_hash")
+  name         String
+  role         UserRole @default(CUSTOMER)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  refreshTokens  RefreshToken[]
+  subscriptions  Subscription[]
+  orders         Order[]
+  licenses       License[]
+  playbackEvents PlaybackEvent[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ============================================================
+// CATÁLOGO
+// ============================================================
+
+model Artist {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  bio       String?
+  imageKey  String?  @map("image_key")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  albums Album[]
+  tracks Track[]
+
+  @@map("artists")
+}
+
+model Album {
+  id          String    @id @default(uuid()) @db.Uuid
+  title       String
+  slug        String    @unique
+  coverKey    String?   @map("cover_key")
+  releaseDate DateTime? @map("release_date") @db.Date
+  artistId    String    @map("artist_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  artist Artist  @relation(fields: [artistId], references: [id])
+  tracks Track[]
+
+  @@map("albums")
+}
+
+model Track {
+  id              String      @id @default(uuid()) @db.Uuid
+  albumId         String?     @map("album_id") @db.Uuid
+  artistId        String      @map("artist_id") @db.Uuid
+  title           String
+  slug            String      @unique
+  isrc            String?
+  upc             String?
+  genre           String?
+  mood            String?
+  durationSeconds Int?        @map("duration_seconds")
+  status          TrackStatus @default(DRAFT)
+  previewKey      String?     @map("preview_key")
+  streamKey       String?     @map("stream_key")
+  masterKey       String?     @map("master_key")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  album          Album?           @relation(fields: [albumId], references: [id], onDelete: SetNull)
+  artist         Artist           @relation(fields: [artistId], references: [id])
+  licenseProducts LicenseProduct[]
+  licenses        License[]
+  playbackEvents  PlaybackEvent[]
+
+  @@index([status])
+  @@index([albumId])
+  @@index([artistId])
+  @@map("tracks")
+}
+
+// ============================================================
+// BILLING
+// ============================================================
+
+model Plan {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String   @unique
+  priceCents     Int      @map("price_cents")
+  currency       String   @default("BRL") @db.Char(3)
+  intervalUnit   String   @map("interval_unit") // "month" | "year"
+  intervalCount  Int      @default(1) @map("interval_count")
+  active         Boolean  @default(true)
+  externalPlanId String?  @map("external_plan_id")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                     String             @id @default(uuid()) @db.Uuid
+  userId                 String             @map("user_id") @db.Uuid
+  planId                 String             @map("plan_id") @db.Uuid
+  externalSubscriptionId String?            @unique @map("external_subscription_id")
+  status                 SubscriptionStatus @default(PENDING)
+  currentPeriodStart     DateTime?          @map("current_period_start") @db.Timestamptz
+  currentPeriodEnd       DateTime?          @map("current_period_end") @db.Timestamptz
+  cancelAtPeriodEnd      Boolean            @default(false) @map("cancel_at_period_end")
+  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt              DateTime           @updatedAt @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id])
+  plan Plan @relation(fields: [planId], references: [id])
+
+  @@index([userId])
+  @@map("subscriptions")
+}
+
+// ============================================================
+// LICENCIAMENTO
+// ============================================================
+
+model LicenseProduct {
+  id              String   @id @default(uuid()) @db.Uuid
+  trackId         String   @map("track_id") @db.Uuid
+  name            String
+  purpose         String
+  commercialUse   Boolean  @default(false) @map("commercial_use")
+  downloadAllowed Boolean  @default(false) @map("download_allowed")
+  durationDays    Int?     @map("duration_days")
+  territory       String   @default("WORLDWIDE")
+  priceCents      Int      @map("price_cents")
+  currency        String   @default("BRL") @db.Char(3)
+  active          Boolean  @default(true)
+
+  track Track @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@index([trackId])
+  @@map("license_products")
+}
+
+model Order {
+  id              String      @id @default(uuid()) @db.Uuid
+  userId          String      @map("user_id") @db.Uuid
+  status          OrderStatus @default(PENDING)
+  totalCents      Int         @map("total_cents")
+  currency        String      @default("BRL") @db.Char(3)
+  externalPaymentId String?   @map("external_payment_id")
+  idempotencyKey  String?     @unique @map("idempotency_key")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  paidAt          DateTime?   @map("paid_at") @db.Timestamptz
+
+  user   User        @relation(fields: [userId], references: [id])
+  items  OrderItem[]
+  licenses License[]
+
+  @@index([userId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String      @id @default(uuid()) @db.Uuid
+  orderId        String      @map("order_id") @db.Uuid
+  productType    ProductType @map("product_type")
+  productId      String?     @map("product_id") @db.Uuid
+  quantity       Int         @default(1)
+  unitPriceCents Int         @map("unit_price_cents")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model License {
+  id              String        @id @default(uuid()) @db.Uuid
+  licenseCode     String        @unique @map("license_code")
+  userId          String        @map("user_id") @db.Uuid
+  trackId         String        @map("track_id") @db.Uuid
+  orderId         String?       @map("order_id") @db.Uuid
+  status          LicenseStatus @default(PENDING)
+  purpose         String
+  territory       String        @default("WORLDWIDE")
+  commercialUse   Boolean       @default(false) @map("commercial_use")
+  downloadAllowed Boolean       @default(false) @map("download_allowed")
+  startsAt        DateTime      @map("starts_at") @db.Timestamptz
+  expiresAt       DateTime?     @map("expires_at") @db.Timestamptz
+  termsVersion    String        @map("terms_version")
+  issuedAt        DateTime?     @map("issued_at") @db.Timestamptz
+  revokedAt       DateTime?     @map("revoked_at") @db.Timestamptz
+
+  user  User   @relation(fields: [userId], references: [id])
+  track Track  @relation(fields: [trackId], references: [id])
+  order Order? @relation(fields: [orderId], references: [id])
+
+  @@index([userId])
+  @@index([trackId])
+  @@map("licenses")
+}
+
+// ============================================================
+// PLAYBACK + PAYMENT EVENTS
+// ============================================================
+
+model PlaybackEvent {
+  id            BigInt   @id @default(autoincrement())
+  userId        String?  @map("user_id") @db.Uuid
+  trackId       String   @map("track_id") @db.Uuid
+  source        String
+  secondsPlayed Int      @default(0) @map("seconds_played")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user  User?  @relation(fields: [userId], references: [id])
+  track Track  @relation(fields: [trackId], references: [id])
+
+  @@index([trackId, createdAt])
+  @@map("playback_events")
+}
+
+model PaymentEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  provider        String
+  externalEventId String    @map("external_event_id")
+  eventType       String    @map("event_type")
+  payload         Json
+  processedAt     DateTime? @map("processed_at") @db.Timestamptz
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([provider, externalEventId])
+  @@index([createdAt])
+  @@map("payment_events")
+}
