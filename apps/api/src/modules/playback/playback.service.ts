@@ -31,21 +31,26 @@ export class PlaybackService {
       throw new ForbiddenException(decision.reason);
     }
 
-    // Escolhe a melhor key disponível:
-    // - assinatura/aluguel/admin → streamKey (qualidade cheia)
-    // - preview → previewKey (só amostra)
+    // Assinante/aluguel/admin → streamKey (qualidade cheia)
+    // Preview → previewKey (amostra de 30s)
+    // ⚠️ Sem fallback: se falta a key esperada, é erro (não serve preview pro assinante)
     const usePreview = decision.source === 'preview';
-    const key = usePreview
-      ? track.previewKey
-      : (track.streamKey ?? track.previewKey);
+    const key = usePreview ? track.previewKey : track.streamKey;
 
     if (!key) {
-      throw new ForbiddenException('Sem áudio disponível');
+      throw new ForbiddenException(
+        usePreview
+          ? 'Preview não disponível para esta faixa.'
+          : 'Áudio completo indisponível no momento. Contate o suporte.',
+      );
     }
 
     const { url, expiresAt } = await this.storage.getPlaybackUrl(key);
 
-    // Registra o evento de playback (auditoria)
+    // Registra intent-to-play (auditoria).
+    // NOTA: `secondsPlayed: 0` porque o áudio ainda não tocou. Um endpoint
+    // separado (`POST /playback/:id/progress`) deve atualizar isso conforme
+    // o frontend reporta progresso (a cada 15-30s).
     if (userId) {
       await this.prisma.playbackEvent.create({
         data: {

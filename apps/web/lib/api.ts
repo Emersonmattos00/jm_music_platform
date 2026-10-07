@@ -18,7 +18,7 @@ export interface Album {
   title: string;
   slug: string;
   coverUrl: string | null;
-  upc: string | null;          // 🆕
+  upc: string | null;
   releaseDate?: string | null;
   artist?: Artist;
   _count?: { tracks: number };
@@ -49,12 +49,13 @@ export interface User {
   email: string;
   name: string;
   role: 'CUSTOMER' | 'ADMIN';
+  emailVerified?: string | null; // 🆕
 }
 
 export interface AuthResponse {
   user: User;
   accessToken: string;
-  refreshToken: string;
+  // refreshToken NÃO existe mais — fica em cookie httpOnly
 }
 
 export interface PlaybackResponse {
@@ -157,15 +158,13 @@ export interface SocialLink {
 }
 
 // ----------------------------------------------------------
-// TOKEN STORAGE
+// TOKEN STORAGE (só access token + user — refresh em cookie httpOnly)
 // ----------------------------------------------------------
 
 const ACCESS_KEY = 'jm_access_token';
-const REFRESH_KEY = 'jm_refresh_token';
 const USER_KEY = 'jm_user';
 
-// Storage em memória como fallback quando localStorage está bloqueado
-// (iframes, cookies bloqueados, extensões de privacidade, etc.)
+// Fallback em memória quando localStorage está bloqueado
 const memoryStorage: Record<string, string> = {};
 
 function safeGet(key: string): string | null {
@@ -199,9 +198,6 @@ export const tokenStore = {
   getAccess(): string | null {
     return safeGet(ACCESS_KEY);
   },
-  getRefresh(): string | null {
-    return safeGet(REFRESH_KEY);
-  },
   getUser(): User | null {
     const raw = safeGet(USER_KEY);
     if (!raw) return null;
@@ -211,14 +207,12 @@ export const tokenStore = {
       return null;
     }
   },
-  set(access: string, refresh: string, user: User) {
+  set(access: string, user: User) {
     safeSet(ACCESS_KEY, access);
-    safeSet(REFRESH_KEY, refresh);
     safeSet(USER_KEY, JSON.stringify(user));
   },
   clear() {
     safeRemove(ACCESS_KEY);
-    safeRemove(REFRESH_KEY);
     safeRemove(USER_KEY);
   },
 };
@@ -235,20 +229,17 @@ export const tokenStore = {
 let refreshPromise: Promise<boolean> | null = null;
 
 async function performRefresh(): Promise<boolean> {
-  const refreshToken = tokenStore.getRefresh();
-  if (!refreshToken) return false;
-
   try {
     const res = await fetch(`${API_URL}/auth/refresh`, {
       method: 'POST',
+      credentials: 'include', // cookie httpOnly vai automático
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
     });
 
     if (!res.ok) return false;
 
     const data = (await res.json()) as AuthResponse;
-    tokenStore.set(data.accessToken, data.refreshToken, data.user);
+    tokenStore.set(data.accessToken, data.user);
     return true;
   } catch {
     return false;
@@ -256,7 +247,6 @@ async function performRefresh(): Promise<boolean> {
 }
 
 async function tryRefresh(): Promise<boolean> {
-  // Se já existe um refresh em andamento, aguarda ele
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = performRefresh().finally(() => {
@@ -269,7 +259,6 @@ async function tryRefresh(): Promise<boolean> {
 function forceLogout() {
   tokenStore.clear();
   if (typeof window !== 'undefined') {
-    // Evita redirect em loop caso já esteja em /login
     if (!window.location.pathname.startsWith('/login')) {
       window.location.href = '/login';
     }
@@ -303,26 +292,25 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const doFetch = () =>
     fetch(`${API_URL}${path}`, {
       ...rest,
+      credentials: 'include', // cookie httpOnly vai automático
       headers: buildHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
 
   let res = await doFetch();
 
-  // Se autenticado e tomou 401 → tenta refresh 1x
   if (res.status === 401 && auth) {
     const refreshed = await tryRefresh();
 
     if (!refreshed) {
       forceLogout();
-      const err = new Error('Sessão expirada. Faça login novamente.') as Error & {
-        status?: number;
-      };
+      const err = new Error(
+        'Sessão expirada. Faça login novamente.',
+      ) as Error & { status?: number };
       err.status = 401;
       throw err;
     }
 
-    // Repete a requisição original com o novo access token
     res = await doFetch();
   }
 
@@ -331,7 +319,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   if (!res.ok) {
     const message = data?.message ?? `Erro ${res.status}`;
-    const err = new Error(message) as Error & { status?: number; payload?: unknown };
+    const err = new Error(message) as Error & {
+      status?: number;
+      payload?: unknown;
+    };
     err.status = res.status;
     err.payload = data;
     throw err;
@@ -345,7 +336,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 // ----------------------------------------------------------
 
 export const api = {
-  // Auth
+  // ============================================================
+  // AUTH
+  // ============================================================
   register: (input: { email: string; password: string; name: string }) =>
     request<AuthResponse>('/auth/register', { method: 'POST', body: input }),
 
@@ -354,14 +347,41 @@ export const api = {
 
   me: () => request<User>('/auth/me', { auth: true }),
 
-  logout: (refreshToken: string) =>
-    request<{ success: boolean }>('/auth/logout', {
+  // sem argumento — cookie vai automático
+  logout: () =>
+    request<{ success: boolean }>('/auth/logout', { method: 'POST' }),
+
+  // 🆕 Recuperação de senha
+  forgotPassword: (email: string) =>
+    request<{ ok: boolean; message: string }>('/auth/forgot-password', {
       method: 'POST',
-      body: { refreshToken },
+      body: { email },
     }),
 
-  // Catálogo
-  listTracks: (params: { q?: string; genre?: string; page?: number; limit?: number } = {}) => {
+  resetPassword: (token: string, password: string) =>
+    request<{ ok: boolean; message: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: { token, password },
+    }),
+
+  verifyEmail: (token: string) =>
+    request<{ ok: boolean; message: string }>('/auth/verify-email', {
+      method: 'POST',
+      body: { token },
+    }),
+
+  resendVerification: () =>
+    request<{ ok: boolean; message: string }>('/auth/resend-verification', {
+      method: 'POST',
+      auth: true,
+    }),
+
+  // ============================================================
+  // CATÁLOGO
+  // ============================================================
+  listTracks: (
+    params: { q?: string; genre?: string; page?: number; limit?: number } = {},
+  ) => {
     const search = new URLSearchParams();
     if (params.q) search.set('q', params.q);
     if (params.genre) search.set('genre', params.genre);
@@ -379,64 +399,93 @@ export const api = {
 
   listAlbums: () => request<Album[]>('/catalog/albums'),
 
-  // Playback
+  // ============================================================
+  // PLAYBACK
+  // ============================================================
   authorize: (trackId: string) =>
     request<PlaybackResponse>(`/playback/${trackId}`, { auth: true }),
 
-  // Aluguel — produtos
+  // ============================================================
+  // ALUGUEL — produtos
+  // ============================================================
   listTrackRentalProducts: (trackId: string) =>
     request<RentalProduct[]>(`/tracks/${trackId}/rental-products`),
 
   listAlbumRentalProducts: (albumId: string) =>
     request<RentalProduct[]>(`/albums/${albumId}/rental-products`),
 
-  // Aluguel — pedidos
-  createRentalOrder: (productId: string) =>
+  // ============================================================
+  // ALUGUEL — pedidos (com idempotência)
+  // ============================================================
+  createRentalOrder: (productId: string, idempotencyKey?: string) =>
     request<RentalOrder>('/orders/rental', {
       method: 'POST',
       body: { productId },
       auth: true,
+      headers: idempotencyKey
+        ? { 'Idempotency-Key': idempotencyKey }
+        : undefined,
     }),
 
-  createAlbumRentalOrder: (albumId: string, durationHours: number) =>
+  createAlbumRentalOrder: (
+    albumId: string,
+    durationHours: number,
+    idempotencyKey?: string,
+  ) =>
     request<AlbumRentalOrder>('/orders/album-rental', {
       method: 'POST',
       body: { albumId, durationHours },
       auth: true,
+      headers: idempotencyKey
+        ? { 'Idempotency-Key': idempotencyKey }
+        : undefined,
     }),
 
-    // Aluguel — pagamento simulado (só funciona em dev)
+  // Aluguel — pagamento simulado (só funciona em dev)
   mockPayRental: (orderId: string) =>
-    request<{ order: any; rental: Rental }>(`/orders/${orderId}/mock-pay-rental`, {
+    request<{ order: any; rental: Rental }>(
+      `/orders/${orderId}/mock-pay-rental`,
+      { method: 'POST', auth: true },
+    ),
+
+  mockPayAlbumRental: (orderId: string) =>
+    request<{
+      order: any;
+      rentals: number;
+      firstCode: string;
+      expiresAt: string;
+    }>(`/orders/${orderId}/mock-pay-album-rental`, {
       method: 'POST',
       auth: true,
     }),
 
-  mockPayAlbumRental: (orderId: string) =>
-    request<{ order: any; rentals: number; firstCode: string; expiresAt: string }>(
-      `/orders/${orderId}/mock-pay-album-rental`,
-      { method: 'POST', auth: true },
-    ),
-
   // Aluguel — checkout via Mercado Pago
   createRentalCheckout: (orderId: string) =>
-    request<{ orderId: string; checkoutUrl: string | null; preferenceId: string }>(
-      `/checkout/rental/${orderId}`,
-      { method: 'POST', auth: true },
-    ),
+    request<{
+      orderId: string;
+      checkoutUrl: string | null;
+      preferenceId: string;
+    }>(`/checkout/rental/${orderId}`, { method: 'POST', auth: true }),
 
   // Aluguel — listagem
   listMyRentals: () => request<Rental[]>('/me/rentals', { auth: true }),
 
-  // Planos
+  // ============================================================
+  // PLANOS
+  // ============================================================
   listPlans: () => request<Plan[]>('/plans'),
 
-  // Rádio
-  radioTracks: (limit = 300) => request<Track[]>(`/radio/tracks?limit=${limit}`),
+  // ============================================================
+  // RÁDIO
+  // ============================================================
+  radioTracks: (limit = 300) =>
+    request<Track[]>(`/radio/tracks?limit=${limit}`),
 
   radioAccess: () => request<RadioAccess>('/radio/access', { auth: true }),
 
-  // Assinaturas (Mercado Pago)
+  // ============================================================
+  // ASSINATURAS (Mercado Pago)
+  // ============================================================
   checkoutSubscription: (planId: string) =>
     request<{
       subscription: {
@@ -467,7 +516,13 @@ export const api = {
       currentPeriodStart: string | null;
       currentPeriodEnd: string | null;
       cancelAtPeriodEnd: boolean;
-      plan: { id: string; name: string; priceCents: number; currency: string; intervalUnit: string };
+      plan: {
+        id: string;
+        name: string;
+        priceCents: number;
+        currency: string;
+        intervalUnit: string;
+      };
     }>(`/checkout/subscription/${subscriptionId}/status`, { auth: true }),
 
   getMySubscription: () =>
@@ -477,7 +532,13 @@ export const api = {
       currentPeriodStart: string | null;
       currentPeriodEnd: string | null;
       cancelAtPeriodEnd: boolean;
-      plan: { id: string; name: string; priceCents: number; currency: string; intervalUnit: string };
+      plan: {
+        id: string;
+        name: string;
+        priceCents: number;
+        currency: string;
+        intervalUnit: string;
+      };
     } | null>('/me/subscription', { auth: true }),
 
   cancelSubscription: (subscriptionId: string) =>
@@ -490,10 +551,14 @@ export const api = {
       auth: true,
     }),
 
-  // Social
+  // ============================================================
+  // SOCIAL
+  // ============================================================
   listSocial: () => request<SocialLink[]>('/social'),
 
-  // Newsletter
+  // ============================================================
+  // NEWSLETTER
+  // ============================================================
   subscribeNewsletter: (email: string, name?: string) =>
     request<{
       ok: boolean;
@@ -506,6 +571,8 @@ export const api = {
   // ============================================================
   // ADMIN
   // ============================================================
+
+  // Dashboard
   adminDashboard: () =>
     request<{
       users: { total: number; newThisMonth: number };
@@ -518,7 +585,10 @@ export const api = {
       };
     }>('/admin/dashboard', { auth: true }),
 
-  adminListUsers: (params: { q?: string; role?: string; page?: number; limit?: number } = {}) => {
+  // Users
+  adminListUsers: (
+    params: { q?: string; role?: string; page?: number; limit?: number } = {},
+  ) => {
     const search = new URLSearchParams();
     if (params.q) search.set('q', params.q);
     if (params.role) search.set('role', params.role);
@@ -530,7 +600,24 @@ export const api = {
     });
   },
 
-    // 🆕 CATALOG — UPDATE
+  adminUpdateUserRole: (userId: string, role: 'CUSTOMER' | 'ADMIN') =>
+    request<{ id: string; email: string; name: string; role: string }>(
+      `/admin/users/${userId}/role`,
+      { method: 'PATCH', body: { role }, auth: true },
+    ),
+
+  // Catalog — Albums
+  adminCreateAlbum: (input: {
+    title: string;
+    coverUrl?: string;
+    releaseDate?: string;
+  }) =>
+    request<any>('/admin/catalog/albums', {
+      method: 'POST',
+      body: input,
+      auth: true,
+    }),
+
   adminUpdateAlbum: (
     id: string,
     input: {
@@ -549,6 +636,30 @@ export const api = {
       releaseDate: string | null;
     }>(`/admin/catalog/albums/${id}`, {
       method: 'PATCH',
+      body: input,
+      auth: true,
+    }),
+
+  adminReorderAlbumTracks: (albumId: string, orderedIds: string[]) =>
+    request<{ ok: boolean; count: number }>(
+      `/admin/catalog/albums/${albumId}/tracks/reorder`,
+      {
+        method: 'PATCH',
+        body: { orderedIds },
+        auth: true,
+      },
+    ),
+
+  // Catalog — Tracks
+  adminCreateTrack: (input: {
+    title: string;
+    albumId?: string;
+    genre?: string;
+    mood?: string;
+    durationSeconds?: number;
+  }) =>
+    request<any>('/admin/catalog/tracks', {
+      method: 'POST',
       body: input,
       auth: true,
     }),
@@ -576,38 +687,37 @@ export const api = {
       durationSeconds: number | null;
       status: string;
       createdAt: string;
-      artist: { id: string; name: string; slug: string | null; imageUrl: string | null };
-      album: { id: string; title: string; slug: string; coverUrl: string | null } | null;
+      artist: {
+        id: string;
+        name: string;
+        slug: string | null;
+        imageUrl: string | null;
+      };
+      album: {
+        id: string;
+        title: string;
+        slug: string;
+        coverUrl: string | null;
+      } | null;
     }>(`/admin/catalog/tracks/${id}`, {
       method: 'PATCH',
       body: input,
       auth: true,
     }),
 
-  // 🆕 Reordenar faixas do álbum
-  adminReorderAlbumTracks: (albumId: string, orderedIds: string[]) =>
-    request<{ ok: boolean; count: number }>(
-      `/admin/catalog/albums/${albumId}/tracks/reorder`,
-      {
-        method: 'PATCH',
-        body: { orderedIds },
-        auth: true,
-      },
-    ),
+  adminPublishTrack: (id: string) =>
+    request<any>(`/admin/catalog/tracks/${id}/publish`, {
+      method: 'PATCH',
+      auth: true,
+    }),
 
-  // 🆕 Arquivar faixa
   adminArchiveTrack: (id: string) =>
     request<any>(`/admin/catalog/tracks/${id}/archive`, {
       method: 'PATCH',
       auth: true,
     }),
 
-  adminUpdateUserRole: (userId: string, role: 'CUSTOMER' | 'ADMIN') =>
-    request<{ id: string; email: string; name: string; role: string }>(
-      `/admin/users/${userId}/role`,
-      { method: 'PATCH', body: { role }, auth: true },
-    ),
-
+  // Subscriptions / Rentals
   adminListSubscriptions: () =>
     request<any[]>('/admin/subscriptions', { auth: true }),
 
@@ -618,20 +728,4 @@ export const api = {
       `/admin/reports/top-tracks?limit=${limit}`,
       { auth: true },
     ),
-
-  adminCreateAlbum: (input: { title: string; coverUrl?: string; releaseDate?: string }) =>
-    request<any>('/admin/catalog/albums', { method: 'POST', body: input, auth: true }),
-
-  adminCreateTrack: (input: {
-    title: string;
-    albumId?: string;
-    genre?: string;
-    mood?: string;
-    durationSeconds?: number;
-  }) =>
-    request<any>('/admin/catalog/tracks', { method: 'POST', body: input, auth: true }),
-
-  adminPublishTrack: (id: string) =>
-    request<any>(`/admin/catalog/tracks/${id}/publish`, { method: 'PATCH', auth: true }),
 };
-

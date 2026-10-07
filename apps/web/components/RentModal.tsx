@@ -21,7 +21,12 @@ type AccessState =
   | { kind: 'has-rental'; rental: Rental }
   | { kind: 'has-subscription' };
 
-export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }: Props) {
+export function RentModal({
+  track,
+  onClose,
+  onConfirmed,
+  initialTab = 'track',
+}: Props) {
   const { isAuthenticated } = useAuth();
 
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -91,9 +96,7 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
           const activeRental = rentals.find((r) => {
             if (r.status !== 'ACTIVE') return false;
             if (new Date(r.expiresAt) <= now) return false;
-            // Aluguel da faixa
             if (r.track?.id === track.id) return true;
-            // Aluguel do álbum que contém a faixa
             if (albumId && r.album?.id === albumId) return true;
             return false;
           });
@@ -131,15 +134,28 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, processing]);
 
+  // ------------------------------------------------------------
+  // CONTINUAR → cria pedido + cria preference do MP + redireciona
+  // ------------------------------------------------------------
   async function handleContinue() {
     setProcessing(true);
     setError(null);
+
+    // Idempotency-Key única pra essa tentativa.
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
     try {
       let orderId: string;
 
       if (tab === 'track') {
         if (!selectedTrack) return;
-        const order = await api.createRentalOrder(selectedTrack);
+        const order = await api.createRentalOrder(
+          selectedTrack,
+          idempotencyKey,
+        );
         orderId = order.order.id;
       } else {
         if (!selectedAlbum || !albumId) return;
@@ -151,6 +167,7 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
         const order = await api.createAlbumRentalOrder(
           albumId,
           product.durationHours,
+          idempotencyKey,
         );
         orderId = order.order.id;
       }
@@ -176,12 +193,10 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
   const selected = tab === 'track' ? selectedTrack : selectedAlbum;
   const setSelected = tab === 'track' ? setSelectedTrack : setSelectedAlbum;
 
-  const canContinue = tab === 'track'
-    ? !!selectedTrack
-    : !!selectedAlbum && !!albumId;
-
-  const hasFullAccess =
-    access.kind === 'has-subscription' || access.kind === 'has-rental';
+  const canContinue =
+    tab === 'track'
+      ? !!selectedTrack
+      : !!selectedAlbum && !!albumId;
 
   return (
     <div
@@ -191,7 +206,7 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
       }}
     >
       <div className="w-full max-w-lg bg-[#0f141a] border border-line rounded-2xl p-6 shadow-2xl my-8">
-        {/* ─── Estado: assinante ─── */}
+        {/* Estado: assinante */}
         {access.kind === 'has-subscription' && (
           <>
             <div className="flex items-start justify-between mb-4">
@@ -225,7 +240,7 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
           </>
         )}
 
-        {/* ─── Estado: já alugado ─── */}
+        {/* Estado: já alugado */}
         {access.kind === 'has-rental' && (
           <>
             <div className="flex items-start justify-between mb-4">
@@ -256,7 +271,10 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
                 .
               </p>
               <div className="mt-3 text-xs text-muted">
-                Código: <span className="font-mono text-gold2">{access.rental.rentalCode}</span>
+                Código:{' '}
+                <span className="font-mono text-gold2">
+                  {access.rental.rentalCode}
+                </span>
               </div>
             </div>
 
@@ -276,12 +294,15 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
           </>
         )}
 
-        {/* ─── Estado: sem acesso (fluxo normal) ─── */}
+        {/* Estado: sem acesso */}
         {access.kind === 'none' && (
           <>
             <div className="flex items-start justify-between mb-2">
               <h2 className="text-2xl font-black">
-                Alugar <span className="text-gold">{tab === 'track' ? 'faixa' : 'álbum'}</span>
+                Alugar{' '}
+                <span className="text-gold">
+                  {tab === 'track' ? 'faixa' : 'álbum'}
+                </span>
               </h2>
               <button
                 onClick={onClose}
@@ -337,7 +358,8 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
                   <div
                     className="w-full h-full flex items-end p-2"
                     style={{
-                      background: 'linear-gradient(135deg, #202e3a, #6f5227 58%, #d0a34c)',
+                      background:
+                        'linear-gradient(135deg, #202e3a, #6f5227 58%, #d0a34c)',
                     }}
                   >
                     <span className="text-[9px] font-black leading-tight line-clamp-2">
@@ -348,7 +370,9 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
               </div>
               <div className="min-w-0">
                 <div className="font-semibold truncate">
-                  {tab === 'track' ? track.title : (track.album?.title ?? 'Álbum')}
+                  {tab === 'track'
+                    ? track.title
+                    : track.album?.title ?? 'Álbum'}
                 </div>
                 <div className="text-xs text-muted truncate">
                   {tab === 'track' ? (
@@ -367,7 +391,11 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
               </div>
             </div>
 
-            {loading && <div className="text-muted text-center py-10">Carregando opções…</div>}
+            {loading && (
+              <div className="text-muted text-center py-10">
+                Carregando opções…
+              </div>
+            )}
             {error && <div className="text-red-400 text-sm mb-4">{error}</div>}
 
             {!loading && (
@@ -392,7 +420,9 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
                             isSelected ? 'border-gold' : 'border-[#4a5768]'
                           }`}
                         >
-                          {isSelected && <span className="w-2.5 h-2.5 rounded-full bg-gold" />}
+                          {isSelected && (
+                            <span className="w-2.5 h-2.5 rounded-full bg-gold" />
+                          )}
                         </span>
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold">{p.name}</div>
@@ -418,7 +448,9 @@ export function RentModal({ track, onClose, onConfirmed, initialTab = 'track' }:
                   disabled={!canContinue || processing}
                   className="w-full py-4 rounded-xl font-bold bg-gold text-[#16130c] hover:bg-gold2 transition disabled:opacity-50"
                 >
-                  {processing ? 'Redirecionando…' : 'CONTINUAR PARA PAGAMENTO'}
+                  {processing
+                    ? 'Redirecionando…'
+                    : 'CONTINUAR PARA PAGAMENTO'}
                 </button>
 
                 <p className="text-center text-xs text-muted mt-4">

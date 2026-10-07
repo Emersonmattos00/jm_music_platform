@@ -142,12 +142,15 @@ async function main() {
   const adminPassword = await bcrypt.hash('troque-esta-senha-123', 10);
   const admin = await prisma.user.upsert({
     where: { email: 'joseph@jmmusic.com' },
-    update: {},
+    update: {
+      emailVerified: new Date(), // 🆕
+    },
     create: {
       email: 'joseph@jmmusic.com',
       name: 'Joseph Matthos',
       passwordHash: adminPassword,
       role: UserRole.ADMIN,
+      emailVerified: new Date(), // 🆕
     },
   });
   console.log(`👤 Admin: ${admin.email}`);

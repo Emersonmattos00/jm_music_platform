@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Headers,
   HttpCode,
   Param,
   Post,
@@ -11,6 +12,7 @@ import {
 } from '@nestjs/common';
 import { RentalService } from './rental.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { EmailVerifiedGuard } from '../auth/guards/email-verified.guard';
 import {
   CreateTrackRentalOrderDto,
   CreateAlbumRentalOrderDto,
@@ -20,7 +22,7 @@ import {
 export class RentalController {
   constructor(private readonly rental: RentalService) {}
 
-  // ---- Público: listar produtos
+  // ---- Público
 
   @Get('tracks/:trackId/rental-products')
   listTrackProducts(@Param('trackId') trackId: string) {
@@ -32,23 +34,38 @@ export class RentalController {
     return this.rental.listAlbumRentalProducts(albumId);
   }
 
-  // ---- Autenticado: criar e pagar pedidos
+  // ---- Autenticado + email verificado
 
   @Post('orders/rental')
-  @UseGuards(JwtAuthGuard)
-  createTrackOrder(@Req() req: any, @Body() dto: CreateTrackRentalOrderDto) {
-    return this.rental.createTrackRentalOrder(req.user.id, dto.productId);
+  @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
+  createTrackOrder(
+    @Req() req: any,
+    @Body() dto: CreateTrackRentalOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.rental.createTrackRentalOrder(
+      req.user.id,
+      dto.productId,
+      idempotencyKey,
+    );
   }
 
   @Post('orders/album-rental')
-  @UseGuards(JwtAuthGuard)
-  createAlbumOrder(@Req() req: any, @Body() dto: CreateAlbumRentalOrderDto) {
+  @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
+  createAlbumOrder(
+    @Req() req: any,
+    @Body() dto: CreateAlbumRentalOrderDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
     return this.rental.createAlbumRentalOrder(
       req.user.id,
       dto.albumId,
       dto.durationHours,
+      idempotencyKey,
     );
   }
+
+  // ---- Mock pay (só dev — não precisa verificar email, já é dev)
 
   @Post('orders/:id/mock-pay-rental')
   @HttpCode(200)
@@ -65,6 +82,8 @@ export class RentalController {
     this.assertMockPayAllowed();
     return this.rental.mockPayAlbum(req.user.id, id);
   }
+
+  // ---- Listagem (não precisa verificar email)
 
   @Get('me/rentals')
   @UseGuards(JwtAuthGuard)

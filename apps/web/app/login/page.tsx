@@ -42,16 +42,26 @@ export default function LoginPage() {
             <input
               type="email"
               required
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-4 py-3 rounded-lg bg-panel border border-line focus:border-gold outline-none"
             />
           </div>
           <div>
-            <label className="block text-sm mb-1">Senha</label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm">Senha</label>
+              <Link
+                href="/forgot-password"
+                className="text-xs text-gold2 hover:underline"
+              >
+                Esqueci minha senha
+              </Link>
+            </div>
             <input
               type="password"
               required
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-3 rounded-lg bg-panel border border-line focus:border-gold outline-none"

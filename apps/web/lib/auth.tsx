@@ -1,6 +1,12 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+} from 'react';
 import { api, tokenStore, User } from './api';
 
 interface AuthContextValue {
@@ -27,24 +33,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.login({ email, password });
-    tokenStore.set(res.accessToken, res.refreshToken, res.user);
+    tokenStore.set(res.accessToken, res.user);
     setUser(res.user);
   }, []);
 
-  const register = useCallback(async (name: string, email: string, password: string) => {
-    const res = await api.register({ name, email, password });
-    tokenStore.set(res.accessToken, res.refreshToken, res.user);
-    setUser(res.user);
-  }, []);
+  const register = useCallback(
+    async (name: string, email: string, password: string) => {
+      const res = await api.register({ name, email, password });
+      tokenStore.set(res.accessToken, res.user);
+      setUser(res.user);
+    },
+    [],
+  );
 
   const logout = useCallback(async () => {
-    const refresh = tokenStore.getRefresh();
-    if (refresh) {
-      try {
-        await api.logout(refresh);
-      } catch {
-        // ignora erro de logout
-      }
+    try {
+      await api.logout();
+    } catch {
+      // ignora erro
     }
     tokenStore.clear();
     setUser(null);

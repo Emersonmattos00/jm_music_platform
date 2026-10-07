@@ -41,10 +41,7 @@ export default function AdminTrackEditPage() {
   const [duration, setDuration] = useState<number | ''>('');
 
   useEffect(() => {
-    if (!id) return;
-    api
-      .adminListTracks?.() // fallback se não existir endpoint direto
-      .catch(() => null);
+        if (!id) return;
     // Como não temos GET admin/tracks/:id, usamos o público como fallback
     // (você pode adicionar depois um endpoint admin dedicado)
     fetch(`${process.env.NEXT_PUBLIC_API_URL}/catalog/tracks/${id}`, {

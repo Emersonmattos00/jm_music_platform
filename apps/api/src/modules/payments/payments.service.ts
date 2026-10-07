@@ -238,7 +238,7 @@ export class PaymentsService {
   }
 
   // ----------------------------------------------------------
-  // WEBHOOK
+  // WEBHOOK — retry-safe + idempotente
   // ----------------------------------------------------------
   async handleWebhook(
     payload: any,
@@ -266,19 +266,24 @@ export class PaymentsService {
         },
       },
     });
-    if (existing) {
+
+    // Se já foi processado com sucesso → duplicate
+    if (existing?.processedAt) {
       return { ok: true, duplicate: true };
     }
 
-    await this.prisma.paymentEvent.create({
-      data: {
-        provider: 'mercadopago',
-        externalEventId: String(eventId),
-        eventType: String(payload?.type ?? payload?.topic ?? 'unknown'),
-        payload,
-        processedAt: new Date(),
-      },
-    });
+    // Se não existe → cria com processedAt null (pending)
+    if (!existing) {
+      await this.prisma.paymentEvent.create({
+        data: {
+          provider: 'mercadopago',
+          externalEventId: String(eventId),
+          eventType: String(payload?.type ?? payload?.topic ?? 'unknown'),
+          payload,
+          // processedAt: null por padrão → ainda não processado
+        },
+      });
+    }
 
     const type = payload?.type ?? payload?.topic;
     const resourceId = payload?.data?.id ?? payload?.resource;
@@ -289,14 +294,27 @@ export class PaymentsService {
       } else if (type === 'payment') {
         await this.handlePaymentEvent(String(resourceId));
       }
+
+      // Marca como processado SÓ após sucesso
+      await this.prisma.paymentEvent.update({
+        where: {
+          provider_externalEventId: {
+            provider: 'mercadopago',
+            externalEventId: String(eventId),
+          },
+        },
+        data: { processedAt: new Date() },
+      });
+
+      return { ok: true };
     } catch (e) {
       this.logger.error(
         `Erro processando webhook ${type}: ${(e as Error).message}`,
         (e as Error).stack,
       );
+      // Re-lança pra NestJS retornar 500 e o MP retentar
+      throw e;
     }
-
-    return { ok: true };
   }
 
   private verifySignature(sig?: {
@@ -305,12 +323,19 @@ export class PaymentsService {
     manifest?: string;
   }) {
     const secret = this.config.get<string>('MERCADOPAGO_WEBHOOK_SECRET');
+
+    // Em produção, exige secret
+    if (this.config.get<string>('NODE_ENV') === 'production' && !secret) {
+      throw new Error('MERCADOPAGO_WEBHOOK_SECRET é obrigatório em produção');
+    }
+
     if (!secret) {
       this.logger.warn(
         'MERCADOPAGO_WEBHOOK_SECRET ausente — pulando validação (INSEGURO)',
       );
       return;
     }
+
     if (!sig?.xSignature || !sig?.manifest) {
       throw new BadRequestException('Assinatura do webhook ausente');
     }
@@ -408,28 +433,62 @@ export class PaymentsService {
         for (const item of order.items) {
           if (!item.productId) continue;
 
+          // productId é SEMPRE RentalProduct.id (faixa OU álbum)
           const product = await tx.rentalProduct.findUnique({
             where: { id: item.productId },
           });
-          if (!product) continue;
+          if (!product) {
+            this.logger.warn(
+              `RentalProduct ${item.productId} não encontrado (order ${order.id})`,
+            );
+            continue;
+          }
 
           const startsAt = new Date();
           const expiresAt = new Date(
             startsAt.getTime() + product.durationHours * 60 * 60 * 1000,
           );
 
-          await tx.rental.create({
-            data: {
-              rentalCode: await this.generateRentalCodeTx(tx),
-              userId: order.userId,
-              trackId: product.trackId,
-              albumId: product.albumId,
-              orderId: order.id,
-              status: RentalStatus.ACTIVE,
-              startsAt,
-              expiresAt,
-            },
-          });
+          // Caso 1: produto de FAIXA → cria 1 rental
+          if (product.trackId) {
+            await tx.rental.create({
+              data: {
+                rentalCode: await this.generateRentalCodeTx(tx),
+                userId: order.userId,
+                trackId: product.trackId,
+                albumId: null,
+                orderId: order.id,
+                status: RentalStatus.ACTIVE,
+                startsAt,
+                expiresAt,
+              },
+            });
+          }
+          // Caso 2: produto de ÁLBUM → cria N rentals (todas as faixas publicadas)
+          else if (product.albumId) {
+            const albumTracks = await tx.track.findMany({
+              where: {
+                albumId: product.albumId,
+                status: 'PUBLISHED',
+              },
+              select: { id: true },
+            });
+
+            for (let i = 0; i < albumTracks.length; i++) {
+              await tx.rental.create({
+                data: {
+                  rentalCode: await this.generateRentalCodeTx(tx, i),
+                  userId: order.userId,
+                  trackId: albumTracks[i].id,
+                  albumId: product.albumId,
+                  orderId: order.id,
+                  status: RentalStatus.ACTIVE,
+                  startsAt,
+                  expiresAt,
+                },
+              });
+            }
+          }
         }
       });
       this.logger.log(`Order ${order.id} paga → rentals criados`);

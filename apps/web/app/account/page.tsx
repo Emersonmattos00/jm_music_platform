@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { AuthGate } from '@/components/AuthGate';
+import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
 export default function AccountPage() {
@@ -74,6 +75,31 @@ function AccountContent() {
             </p>
           </div>
         )}
+        {user && !user.emailVerified && (
+  <div className="max-w-4xl mx-auto mb-6 bg-[#e7b95f10] border border-gold rounded-xl p-4 flex items-center gap-4 flex-wrap">
+    <div className="text-2xl">📧</div>
+    <div className="flex-1 min-w-0">
+      <div className="font-bold text-gold2">Confirme seu email</div>
+      <div className="text-muted text-sm">
+        Enviamos um link para <strong>{user.email}</strong>. Confirme para
+        liberar aluguéis e assinaturas.
+      </div>
+    </div>
+    <button
+      onClick={async () => {
+        try {
+          await api.resendVerification();
+          alert('Email reenviado! Verifique sua caixa de entrada.');
+        } catch (e) {
+          alert((e as Error).message);
+        }
+      }}
+      className="px-4 py-2 rounded-lg text-sm font-bold bg-gold text-[#16130c] hover:bg-gold2 transition"
+    >
+      Reenviar email
+    </button>
+  </div>
+)}
       </div>
     </section>
   );
