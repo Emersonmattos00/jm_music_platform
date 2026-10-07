@@ -1,0 +1,15 @@
+{
+  "name": "JM Music Platform",
+  "portsAttributes": {
+    "3000": {
+      "label": "API",
+      "visibility": "public",
+      "onAutoForward": "silent"
+    },
+    "3001": {
+      "label": "Web",
+      "visibility": "public",
+      "onAutoForward": "silent"
+    }
+  }
+}
