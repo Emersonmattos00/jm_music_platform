@@ -33,10 +33,22 @@ async function bootstrap() {
 
       const normalized = normalizeOrigin(origin);
 
+      // 1) Origens explícitas em WEB_URLS / WEB_URL
       if (configuredOrigins.includes(normalized)) {
         return callback(null, true);
       }
 
+      // 2) Domínios de preview da Vercel deste projeto
+      //    Ex.: https://josephmatthosmusic-lmtnaq2t0-emersonmattos00s-projects.vercel.app
+      const isVercelPreview =
+        /^https:\/\/josephmatthosmusic-[a-z0-9]+-emersonmattos00s-projects\.vercel\.app$/.test(
+          normalized,
+        );
+      if (isVercelPreview) {
+        return callback(null, true);
+      }
+
+      // 3) Em dev: localhost e Codespaces
       if (isDev) {
         const isLocal =
           /^https?:\/\/localhost(:\d+)?$/.test(normalized) ||
@@ -67,6 +79,7 @@ async function bootstrap() {
 
   console.log(`🚀 JM Music API em http://localhost:${port}/v1`);
   console.log(`   CORS (prod): ${configuredOrigins.join(', ') || '(vazio)'}`);
+  console.log(`   CORS (vercel preview): josephmatthosmusic-*.vercel.app`);
 }
 
 bootstrap();
