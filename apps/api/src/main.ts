@@ -3,16 +3,26 @@ import { ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
+function normalizeOrigin(value: string): string {
+  return value.trim().replace(/\/+$/, '');
+}
+
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix('v1');
-
-  // Habilita leitura de cookies (refresh token em httpOnly)
   app.use(cookieParser());
 
   const isDev = process.env.NODE_ENV !== 'production';
-  const webUrl = process.env.WEB_URL ?? 'http://localhost:3001';
+
+  const configuredOrigins = (
+    process.env.WEB_URLS ??
+    process.env.WEB_URL ??
+    'http://localhost:3001'
+  )
+    .split(',')
+    .map(normalizeOrigin)
+    .filter(Boolean);
 
   app.enableCors({
     origin: (
@@ -21,17 +31,25 @@ async function bootstrap() {
     ) => {
       if (!origin) return callback(null, true);
 
-      if (!isDev) {
-        return callback(null, origin === webUrl);
+      const normalized = normalizeOrigin(origin);
+
+      if (configuredOrigins.includes(normalized)) {
+        return callback(null, true);
       }
 
-      const allowed =
-        origin === webUrl ||
-        /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
-        /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin) ||
-        /^https:\/\/[a-z0-9-]+\.app\.github\.dev$/.test(origin);
+      if (isDev) {
+        const isLocal =
+          /^https?:\/\/localhost(:\d+)?$/.test(normalized) ||
+          /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(normalized);
+        const isCodespace =
+          /^https:\/\/[a-z0-9-]+\.app\.github\.dev$/.test(normalized);
+        if (isLocal || isCodespace) return callback(null, true);
+      }
 
-      return callback(null, allowed);
+      return callback(
+        new Error(`CORS: origem não autorizada: ${normalized}`),
+        false,
+      );
     },
     credentials: true,
   });
@@ -46,8 +64,9 @@ async function bootstrap() {
 
   const port = process.env.PORT ?? 3000;
   await app.listen(port, '0.0.0.0');
+
   console.log(`🚀 JM Music API em http://localhost:${port}/v1`);
-  if (isDev) console.log(`   CORS: aceitando *.app.github.dev e localhost`);
+  console.log(`   CORS (prod): ${configuredOrigins.join(', ') || '(vazio)'}`);
 }
 
 bootstrap();
