@@ -1,4 +1,13 @@
 {
+  "name": "jm-music-platform",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:api": "npm --prefix apps/api run dev",
+    "build:web": "npm --prefix apps/web run build",
+    "build:api": "npm --prefix apps/api run build"
+  },
   "dependencies": {
     "@nestjs/schedule": "^12.0.2"
   }
