@@ -55,8 +55,13 @@ export class AuthService {
       },
     });
 
-    // Envia email de verificação
-    await this.sendVerificationEmail(user.id, user.email, user.name);
+    // CORREÇÃO 10.1: Falha no envio de e-mail não interrompe o cadastro.
+    // O usuário ainda recebe os tokens e pode solicitar reenvio depois.
+    try {
+      await this.sendVerificationEmail(user.id, user.email, user.name);
+    } catch (error) {
+      console.error('Falha ao enviar e-mail de verificação (cadastro):', error);
+    }
 
     const tokens = await this.issueTokens(user);
     return { user, ...tokens };
@@ -93,7 +98,7 @@ export class AuthService {
     };
   }
 
-    async refresh(refreshToken: string): Promise<AuthResult> {
+  async refresh(refreshToken: string): Promise<AuthResult> {
     const tokenHash = this.hashToken(refreshToken);
 
     const stored = await this.prisma.refreshToken.findUnique({
@@ -186,7 +191,12 @@ export class AuthService {
       data: { userId: user.id, tokenHash, expiresAt },
     });
 
-    await this.mail.sendPasswordResetEmail(user.email, user.name, rawToken);
+    // Proteção extra: não quebra o fluxo anti-enumeração se o e-mail falhar.
+    try {
+      await this.mail.sendPasswordResetEmail(user.email, user.name, rawToken);
+    } catch (error) {
+      console.error('Falha ao enviar e-mail de redefinição de senha:', error);
+    }
 
     return {
       ok: true,
@@ -198,7 +208,7 @@ export class AuthService {
   // ----------------------------------------------------------
   // RESET PASSWORD
   // ----------------------------------------------------------
-    async resetPassword(token: string, newPassword: string) {
+  async resetPassword(token: string, newPassword: string) {
     const tokenHash = this.hashToken(token);
 
     const stored = await this.prisma.passwordResetToken.findUnique({
@@ -298,7 +308,7 @@ export class AuthService {
   }
 
   /** Valida o token e marca o email como verificado */
-    async verifyEmail(token: string) {
+  async verifyEmail(token: string) {
     const tokenHash = this.hashToken(token);
 
     const stored = await this.prisma.emailVerificationToken.findUnique({
