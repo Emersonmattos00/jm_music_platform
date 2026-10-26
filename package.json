@@ -7,8 +7,5 @@
     "dev:api": "npm --prefix apps/api run dev",
     "build:web": "npm --prefix apps/web run build",
     "build:api": "npm --prefix apps/api run build"
-  },
-  "dependencies": {
-    "@nestjs/schedule": "^12.0.2"
   }
 }
