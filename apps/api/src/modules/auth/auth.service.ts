@@ -93,7 +93,7 @@ export class AuthService {
     };
   }
 
-  async refresh(refreshToken: string): Promise<AuthResult> {
+    async refresh(refreshToken: string): Promise<AuthResult> {
     const tokenHash = this.hashToken(refreshToken);
 
     const stored = await this.prisma.refreshToken.findUnique({
@@ -116,15 +116,21 @@ export class AuthService {
       );
     }
 
-    if (stored.expiresAt < new Date()) {
-      throw new UnauthorizedException('Refresh token inválido ou expirado');
-    }
-
-    // Rotação
-    await this.prisma.refreshToken.update({
-      where: { id: stored.id },
-      data: { revokedAt: new Date() },
+    const now = new Date();
+    const result = await this.prisma.refreshToken.updateMany({
+      where: {
+        id: stored.id,
+        revokedAt: null,
+        expiresAt: { gt: now },
+      },
+      data: { revokedAt: now },
     });
+
+    if (result.count !== 1) {
+      throw new UnauthorizedException(
+        'Token já utilizado ou expirado. Faça login novamente.',
+      );
+    }
 
     const tokens = await this.issueTokens(stored.user);
 
@@ -192,7 +198,7 @@ export class AuthService {
   // ----------------------------------------------------------
   // RESET PASSWORD
   // ----------------------------------------------------------
-  async resetPassword(token: string, newPassword: string) {
+    async resetPassword(token: string, newPassword: string) {
     const tokenHash = this.hashToken(token);
 
     const stored = await this.prisma.passwordResetToken.findUnique({
@@ -201,31 +207,42 @@ export class AuthService {
     });
 
     if (!stored) throw new BadRequestException('Link inválido ou expirado');
-    if (stored.usedAt) {
-      throw new BadRequestException(
-        'Este link já foi utilizado. Solicite um novo.',
-      );
-    }
-    if (stored.expiresAt < new Date()) {
-      throw new BadRequestException('Link expirado. Solicite um novo.');
-    }
 
     const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
 
-    await this.prisma.$transaction([
-      this.prisma.user.update({
+    const now = new Date();
+    const consumed = await this.prisma.$transaction(async (tx: any) => {
+      const result = await tx.passwordResetToken.updateMany({
+        where: {
+          id: stored.id,
+          usedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { usedAt: now },
+      });
+
+      if (result.count !== 1) {
+        return false;
+      }
+
+      await tx.user.update({
         where: { id: stored.userId },
         data: { passwordHash },
-      }),
-      this.prisma.passwordResetToken.update({
-        where: { id: stored.id },
-        data: { usedAt: new Date() },
-      }),
-      this.prisma.refreshToken.updateMany({
+      });
+
+      await tx.refreshToken.updateMany({
         where: { userId: stored.userId, revokedAt: null },
-        data: { revokedAt: new Date() },
-      }),
-    ]);
+        data: { revokedAt: now },
+      });
+
+      return true;
+    });
+
+    if (!consumed) {
+      throw new BadRequestException(
+        'Link já utilizado ou expirado. Solicite um novo.',
+      );
+    }
 
     return {
       ok: true,
@@ -281,7 +298,7 @@ export class AuthService {
   }
 
   /** Valida o token e marca o email como verificado */
-  async verifyEmail(token: string) {
+    async verifyEmail(token: string) {
     const tokenHash = this.hashToken(token);
 
     const stored = await this.prisma.emailVerificationToken.findUnique({
@@ -292,25 +309,35 @@ export class AuthService {
     if (!stored) {
       throw new BadRequestException('Link inválido ou expirado');
     }
-    if (stored.usedAt) {
+
+    const now = new Date();
+    const consumed = await this.prisma.$transaction(async (tx: any) => {
+      const result = await tx.emailVerificationToken.updateMany({
+        where: {
+          id: stored.id,
+          usedAt: null,
+          expiresAt: { gt: now },
+        },
+        data: { usedAt: now },
+      });
+
+      if (result.count !== 1) {
+        return false;
+      }
+
+      await tx.user.update({
+        where: { id: stored.userId },
+        data: { emailVerified: now },
+      });
+
+      return true;
+    });
+
+    if (!consumed) {
       throw new BadRequestException(
-        'Este link já foi utilizado. Solicite um novo.',
+        'Link já utilizado ou expirado. Solicite um novo.',
       );
     }
-    if (stored.expiresAt < new Date()) {
-      throw new BadRequestException('Link expirado. Solicite um novo.');
-    }
-
-    await this.prisma.$transaction([
-      this.prisma.user.update({
-        where: { id: stored.userId },
-        data: { emailVerified: new Date() },
-      }),
-      this.prisma.emailVerificationToken.update({
-        where: { id: stored.id },
-        data: { usedAt: new Date() },
-      }),
-    ]);
 
     return {
       ok: true,
