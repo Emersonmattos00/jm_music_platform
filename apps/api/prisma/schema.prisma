@@ -260,6 +260,8 @@ model Order {
   currency          String      @default("BRL") @db.Char(3)
   externalPaymentId String?     @map("external_payment_id")
   idempotencyKey    String?     @unique @map("idempotency_key")
+  preferenceId      String?     @map("preference_id")        // <-- ADICIONADO
+  preferenceInitPoint String?   @map("preference_init_point") // <-- ADICIONADO
   createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz
   paidAt            DateTime?   @map("paid_at") @db.Timestamptz
 

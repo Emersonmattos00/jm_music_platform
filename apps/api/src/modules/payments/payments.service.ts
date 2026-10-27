@@ -108,7 +108,7 @@ export class PaymentsService {
   // ----------------------------------------------------------
   // CRIAR CHECKOUT DE ALUGUEL (pagamento avulso)
   // ----------------------------------------------------------
-  async createRentalCheckout(userId: string, orderId: string) {
+    async createRentalCheckout(userId: string, orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
@@ -119,6 +119,16 @@ export class PaymentsService {
       throw new BadRequestException('Pedido não está pendente');
     }
 
+    // CORREÇÃO 22: Se já existe uma preferência válida, reutiliza.
+    if (order.preferenceId && order.preferenceInitPoint) {
+      return {
+        orderId: order.id,
+        checkoutUrl: order.preferenceInitPoint,
+        preferenceId: order.preferenceId,
+        idempotent: true,
+      };
+    }
+
     const appUrl = this.config.getOrThrow<string>('APP_URL');
     const apiUrl = this.config.getOrThrow<string>('API_URL');
 
@@ -127,17 +137,31 @@ export class PaymentsService {
       externalReference: `ord-${order.id}`,
       amountCents: order.totalCents,
       currency: order.currency,
-      backUrl: `${appUrl}/checkout/success`,
+      backUrl: `${appUrl}/checkout/rental-success?order=${order.id}`,
       notificationUrl: `${apiUrl}/webhooks/mercadopago`,
     });
 
     const initPoint =
       preference.init_point ?? preference.sandbox_init_point ?? null;
 
+    if (!initPoint) {
+      throw new BadRequestException('Não foi possível gerar o link de pagamento.');
+    }
+
+    // Persiste a preferência no banco para reutilização
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: {
+        preferenceId: preference.id,
+        preferenceInitPoint: initPoint,
+      },
+    });
+
     return {
       orderId: order.id,
       checkoutUrl: initPoint,
       preferenceId: preference.id,
+      idempotent: false,
     };
   }
 
