@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { UploadUrlDto } from './dto/upload-url.dto';
@@ -18,6 +22,7 @@ export class MediaService {
     });
     if (!track) throw new NotFoundException('Faixa não encontrada');
 
+    // CORREÇÃO 30.1: extensionFromMime agora lança erro para MIME inválido
     const extension = this.extensionFromMime(dto.contentType);
     const key = this.buildKey(dto.type, track.slug, extension);
 
@@ -35,9 +40,32 @@ export class MediaService {
   async attach(dto: AttachMediaDto) {
     const track = await this.prisma.track.findUnique({
       where: { id: dto.trackId },
-      select: { id: true },
+      select: { id: true, slug: true },
     });
     if (!track) throw new NotFoundException('Faixa não encontrada');
+
+    // CORREÇÃO 30.2: Valida se a chave recebida corresponde ao padrão
+    // esperado para esta faixa e este tipo de mídia.
+    const expectedExtension = this.extensionFromMime(
+      this.mimeFromKey(dto.key), // ou usa a extensão direta
+    );
+    
+    // A forma mais segura é reconstruir a chave esperada e comparar.
+    // Precisamos extrair a extensão da chave.
+    const parts = dto.key.split('.');
+    const actualExtension = parts.pop()?.toLowerCase();
+    
+    if (!actualExtension || !/^[a-z0-9]+$/.test(actualExtension)) {
+      throw new BadRequestException('Extensão de arquivo inválida.');
+    }
+
+    const expectedKey = this.buildKey(dto.type, track.slug, actualExtension);
+
+    if (dto.key !== expectedKey) {
+      throw new BadRequestException(
+        'A chave do arquivo não corresponde à faixa e ao tipo de mídia.',
+      );
+    }
 
     const exists = await this.storage.objectExists(dto.key);
     if (!exists) {
@@ -104,6 +132,26 @@ export class MediaService {
       'audio/mp4': 'm4a',
       'audio/ogg': 'ogg',
     };
-    return map[mime] ?? 'bin';
+
+    const extension = map[mime.toLowerCase()];
+    if (!extension) {
+      throw new BadRequestException('Formato de áudio não suportado.');
+    }
+    return extension;
+  }
+
+  // Helper adicionado para extrair o MIME fictício da chave
+  // (não é usado para validação real, mas para manter a consistência)
+  private mimeFromKey(key: string): string {
+    const extension = key.split('.').pop()?.toLowerCase();
+    const map: Record<string, string> = {
+      mp3: 'audio/mpeg',
+      wav: 'audio/wav',
+      flac: 'audio/flac',
+      aac: 'audio/aac',
+      m4a: 'audio/mp4',
+      ogg: 'audio/ogg',
+    };
+    return map[extension ?? ''] ?? 'application/octet-stream';
   }
 }
