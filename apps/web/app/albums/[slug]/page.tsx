@@ -76,15 +76,21 @@ export default function AlbumPage() {
     playQueue(tracks, 0);
   }
 
-  function handlePlayTrack(track: Track) {
+    function handlePlayTrack(track: Track) {
     if (current?.id === track.id) {
       toggle();
       return;
     }
-    playQueue(
-      tracks,
-      tracks.findIndex((t) => t.id === track.id),
-    );
+
+    const index = tracks.findIndex((t) => t.id === track.id);
+
+    if (index < 0) {
+      // Proteção: a faixa não pertence a este álbum.
+      // Evita tocar a primeira faixa por engano (findIndex retorna -1).
+      return;
+    }
+
+    playQueue(tracks, index);
   }
 
   const isAlbumPlaying =
