@@ -68,26 +68,57 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // ─────────────────────────────────────────────────────
   // CARREGAR FAIXA
   // ─────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────
+  // CARREGAR FAIXA
+  // ─────────────────────────────────────────────────────
+  const requestIdRef = useRef(0);
+
   const loadTrack = useCallback(async (track: Track) => {
+    const requestId = ++requestIdRef.current;
+
     setError(null);
     setPlaybackInfo(null);
-
     setIsLoading(true);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+
     try {
       const info = await api.authorize(track.id);
+
+      // Descarta respostas de seleções anteriores (race condition).
+      if (requestId !== requestIdRef.current) return;
+
       setPlaybackInfo(info);
 
       const a = audioRef.current;
-      if (!a) return;
+      if (!a) {
+        setError('O reprodutor de áudio não está disponível.');
+        return;
+      }
 
+      a.pause();
       a.src = info.url;
       a.load();
+
       try {
         await a.play();
+
+        // Se outra faixa foi selecionada enquanto o play() rodava, pausa.
+        if (requestId !== requestIdRef.current) {
+          a.pause();
+        }
       } catch {
-        // Autoplay bloqueado pelo navegador — OK
+        if (requestId === requestIdRef.current) {
+          setError(
+            'Não foi possível iniciar o áudio. Toque em reproduzir para tentar novamente.',
+          );
+        }
       }
     } catch (e: unknown) {
+      // Descarta erros de seleções anteriores.
+      if (requestId !== requestIdRef.current) return;
+
       const err = e as { status?: number; message?: string };
       if (err.status === 403) {
         setError('Você não tem assinatura, aluguel ou preview disponível.');
@@ -98,7 +129,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }
       setIsPlaying(false);
     } finally {
-      setIsLoading(false);
+      if (requestId === requestIdRef.current) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
@@ -170,20 +203,23 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     play(queue[i - 1], queue);
   }, [queue, findCurrentIndex, play]);
 
-  const handleEnded = useCallback(() => {
+    const handleEnded = useCallback(() => {
     if (!current) return;
     const a = audioRef.current;
     if (!a) return;
 
-    if (repeat === 'one') {
-      a.currentTime = 0;
-      a.play().catch(() => undefined);
+    // A prévia deve parar ao terminar, independentemente
+    // do modo de repetição selecionado.
+    if (playbackInfo?.isPreview) {
+      setIsPlaying(false);
       return;
     }
 
-    // Se for preview, para em vez de avançar
-    if (playbackInfo?.isPreview) {
-      setIsPlaying(false);
+    if (repeat === 'one') {
+      a.currentTime = 0;
+      a.play().catch(() => {
+        setError('Não foi possível repetir a faixa.');
+      });
       return;
     }
 
