@@ -302,18 +302,37 @@ export class CatalogService {
     });
   }
 
-  async publishTrack(id: string) {
-    await this.ensureTrackExists(id);
+    async publishTrack(id: string) {
+    const track = await this.prisma.track.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        streamKey: true,
+      },
+    });
 
-    const track = await this.prisma.track.update({
+    if (!track) {
+      throw new NotFoundException('Faixa não encontrada');
+    }
+
+    // Correção 34: Não permite publicar faixa sem áudio de streaming.
+    // A existência da chave no banco já é um bom indicador, mas o ideal
+    // seria verificar também se o objeto existe no storage.
+    if (!track.streamKey?.trim()) {
+      throw new ConflictException(
+        'Não é possível publicar uma faixa sem áudio de streaming.',
+      );
+    }
+
+    // Cria os produtos de aluguel antes de publicar
+    await this.ensureRentalProducts(id);
+
+    // Só então publica
+    return this.prisma.track.update({
       where: { id },
       data: { status: TrackStatus.PUBLISHED },
       select: PUBLIC_TRACK_SELECT,
     });
-
-    await this.ensureRentalProducts(id);
-
-    return track;
   }
 
   async archiveTrack(id: string) {
