@@ -33,8 +33,6 @@ export class EntitlementService {
    *   5. Preview público existe?
    *
    * Cache em Redis com TTL de 30s para reduzir load no Postgres.
-   * Apenas decisões de usuário LOGADO são cacheadas (anônimo não tem
-   * estado mutável — sempre retorna preview).
    */
   async canPlay(
     userId: string | null,
@@ -47,15 +45,31 @@ export class EntitlementService {
 
     const cacheKey = `ent:${userId}:${trackId}`;
 
-    const cached = await this.redis.get<EntitlementResult>(cacheKey);
-    if (cached) {
-      return cached;
+    // CORREÇÃO 19.2: Fallback para o PostgreSQL se o Redis falhar.
+    try {
+      const cached = await this.redis.get<EntitlementResult>(cacheKey);
+      if (cached) {
+        return cached;
+      }
+    } catch (error) {
+      // Se o Redis estiver fora do ar, apenas loga e segue para o banco.
+      this.logger.warn(
+        `Falha ao ler cache do Redis (user ${userId}, track ${trackId}). Caindo para o PostgreSQL.`,
+        error,
+      );
     }
 
     const result = await this.computeEntitlement(userId, trackId);
 
-    // Cacheia por 30s. Fire-and-forget (não bloqueia a resposta).
-    void this.redis.setex(cacheKey, CACHE_TTL_SECONDS, result);
+    // Salva no cache em background (fire-and-forget), ignorando erros.
+    void this.redis
+      .setex(cacheKey, CACHE_TTL_SECONDS, result)
+      .catch((error) => {
+        this.logger.warn(
+          `Falha ao salvar cache no Redis (user ${userId}, track ${trackId}).`,
+          error,
+        );
+      });
 
     return result;
   }
@@ -65,10 +79,17 @@ export class EntitlementService {
    * Chame depois de: cancelar assinatura, reembolsar pedido, expirar aluguel.
    */
   async invalidateUser(userId: string): Promise<void> {
-    const deleted = await this.redis.delPattern(`ent:${userId}:*`);
-    if (deleted > 0) {
-      this.logger.log(
-        `Cache invalidado: ${deleted} chaves de entitlement (user ${userId})`,
+    try {
+      const deleted = await this.redis.delPattern(`ent:${userId}:*`);
+      if (deleted > 0) {
+        this.logger.log(
+          `Cache invalidado: ${deleted} chaves de entitlement (user ${userId})`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        `Falha ao invalidar cache no Redis (user ${userId}).`,
+        error,
       );
     }
   }
