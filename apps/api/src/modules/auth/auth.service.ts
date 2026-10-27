@@ -37,6 +37,8 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResult> {
+    // Mantemos o .toLowerCase() aqui para padronizar o armazenamento.
+    // O banco é CITEXT, mas queremos garantir que novos registros sejam minúsculos.
     const email = dto.email.toLowerCase().trim();
 
     const existing = await this.prisma.user.findUnique({ where: { email } });
@@ -56,7 +58,6 @@ export class AuthService {
     });
 
     // CORREÇÃO 10.1: Falha no envio de e-mail não interrompe o cadastro.
-    // O usuário ainda recebe os tokens e pode solicitar reenvio depois.
     try {
       await this.sendVerificationEmail(user.id, user.email, user.name);
     } catch (error) {
@@ -68,7 +69,8 @@ export class AuthService {
   }
 
   async login(dto: LoginDto): Promise<AuthResult> {
-    const email = dto.email.toLowerCase().trim();
+    // CORREÇÃO PR 16: O banco é CITEXT, então não precisamos mais do .toLowerCase()
+    const email = dto.email.trim();
 
     const user = await this.prisma.user.findUnique({ where: { email } });
 
@@ -164,7 +166,8 @@ export class AuthService {
   // FORGOT PASSWORD — anti-enumeração (sempre retorna sucesso)
   // ----------------------------------------------------------
   async forgotPassword(email: string) {
-    const normalized = email.toLowerCase().trim();
+    // CORREÇÃO PR 16: O banco é CITEXT, então não precisamos mais do .toLowerCase()
+    const normalized = email.trim();
 
     const user = await this.prisma.user.findUnique({
       where: { email: normalized },
