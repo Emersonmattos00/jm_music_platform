@@ -89,7 +89,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
-    lastProgressSentRef.current = 0; // Reseta o contador de progresso
+    lastProgressSentRef.current = 0;
 
     try {
       const info = await api.authorize(track.id);
@@ -124,7 +124,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (e: unknown) {
-      // Descarta erros de seleções anteriores.
       if (requestId !== requestIdRef.current) return;
 
       const err = e as { status?: number; message?: string };
@@ -216,8 +215,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const a = audioRef.current;
     if (!a) return;
 
-    // A prévia deve parar ao terminar, independentemente
-    // do modo de repetição selecionado.
     if (playbackInfo?.isPreview) {
       setIsPlaying(false);
       return;
@@ -258,7 +255,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (shouldSend) {
         lastProgressSentRef.current = Math.floor(t);
         updatePlaybackProgress(currentTrack.id, Math.floor(t)).catch(() => {
-          // Falha silenciosa: progresso é "best effort", não crítico.
+          // Falha silenciosa
         });
       }
     };
@@ -303,6 +300,52 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!a) return;
     a.volume = muted ? 0 : volume;
   }, [volume, muted]);
+
+  // ─────────────────────────────────────────────────────
+  // RENOVAÇÃO AUTOMÁTICA DA URL ASSINADA (CORREÇÃO 47.4)
+  // ─────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!current || !playbackInfo || !isPlaying) return;
+    if (!playbackInfo.expiresAt) return;
+
+    const expiresAt = new Date(playbackInfo.expiresAt).getTime();
+    const now = Date.now();
+    const timeUntilExpiry = expiresAt - now;
+
+    // Renova 30 segundos antes de expirar
+    const renewIn = Math.max(timeUntilExpiry - 30_000, 0);
+
+    const timer = setTimeout(async () => {
+      try {
+        const currentTrack = currentRef.current;
+        if (!currentTrack) return;
+
+        const newInfo = await api.authorize(currentTrack.id);
+
+        const audio = audioRef.current;
+        if (audio && newInfo.url) {
+          const wasPlaying = !audio.paused;
+          const savedTime = audio.currentTime;
+
+          audio.src = newInfo.url;
+          audio.load();
+
+          // Restaura a posição para não reiniciar a faixa
+          audio.currentTime = savedTime;
+
+          if (wasPlaying) {
+            await audio.play().catch(() => undefined);
+          }
+        }
+
+        setPlaybackInfo(newInfo);
+      } catch {
+        // Se falhar, o áudio continua com a URL antiga até expirar.
+      }
+    }, renewIn);
+
+    return () => clearTimeout(timer);
+  }, [current, playbackInfo, isPlaying]);
 
   // ─────────────────────────────────────────────────────
   // CONTROLES
