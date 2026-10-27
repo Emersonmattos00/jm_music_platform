@@ -1,37 +1,31 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
-  const { user, loading, isAuthenticated, isAdmin } = useAuth();
+  const { loading, isAuthenticated, isAdmin } = useAuth();
   const router = useRouter();
-  const [waited, setWaited] = useState(false);
-
-  // Espera 500ms para o AuthProvider carregar o user do localStorage
-  useEffect(() => {
-    const timer = setTimeout(() => setWaited(true), 200);
-    return () => clearTimeout(timer);
-  }, []);
 
   useEffect(() => {
-    if (loading || !waited) return;
+    if (loading) return;
 
     if (!isAuthenticated) {
-      router.push('/login');
+      // CORREÇÃO 41.2: Redireciona com replace (sem espera artificial)
+      router.replace('/login');
       return;
     }
 
     if (!isAdmin) {
-      router.push('/');
+      router.replace('/');
     }
-  }, [loading, waited, isAuthenticated, isAdmin, router]);
+  }, [loading, isAuthenticated, isAdmin, router]);
 
-  if (loading || !waited) {
+  if (loading) {
     return (
       <div className="max-w-6xl mx-auto px-6 py-20 text-muted">
-        Carregando…
+        Verificando acesso…
       </div>
     );
   }
