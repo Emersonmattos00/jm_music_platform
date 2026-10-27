@@ -41,8 +41,16 @@ export class AdminController {
 
   @Get('reports/top-tracks')
   topTracks(@Query('limit') limit?: string) {
-    const n = limit ? parseInt(limit, 10) : 20;
-    return this.admin.getTopTracks(isNaN(n) ? 20 : Math.min(n, 100));
+    let n = limit ? parseInt(limit, 10) : 20;
+    
+    // Correção 32.3: Garante que o limite esteja entre 1 e 100.
+    if (isNaN(n) || n < 1) {
+      n = 20;
+    } else if (n > 100) {
+      n = 100;
+    }
+    
+    return this.admin.getTopTracks(n);
   }
 
   @Post('sync-b2')
