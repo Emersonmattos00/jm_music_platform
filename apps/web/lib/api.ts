@@ -49,13 +49,12 @@ export interface User {
   email: string;
   name: string;
   role: 'CUSTOMER' | 'ADMIN';
-  emailVerified?: string | null; // 🆕
+  emailVerified?: string | null;
 }
 
 export interface AuthResponse {
   user: User;
   accessToken: string;
-  // refreshToken NÃO existe mais — fica em cookie httpOnly
 }
 
 export interface PlaybackResponse {
@@ -158,13 +157,12 @@ export interface SocialLink {
 }
 
 // ----------------------------------------------------------
-// TOKEN STORAGE (só access token + user — refresh em cookie httpOnly)
+// TOKEN STORAGE
 // ----------------------------------------------------------
 
 const ACCESS_KEY = 'jm_access_token';
 const USER_KEY = 'jm_user';
 
-// Fallback em memória quando localStorage está bloqueado
 const memoryStorage: Record<string, string> = {};
 
 function safeGet(key: string): string | null {
@@ -218,35 +216,55 @@ export const tokenStore = {
 };
 
 // ----------------------------------------------------------
-// REFRESH AUTOMÁTICO
+// REFRESH AUTOMÁTICO (CORREÇÃO 42.3 e 42.4)
 // ----------------------------------------------------------
 
-/**
- * Fila global de refresh — evita que N requisições 401 disparem
- * N chamadas paralelas a /auth/refresh (o que invalidaria os tokens
- * uns dos outros por causa da rotação no backend).
- */
-let refreshPromise: Promise<boolean> | null = null;
+type RefreshResult =
+  | { ok: true }
+  | { ok: false; reason: 'unauthorized' }
+  | { ok: false; reason: 'network' }
+  | { ok: false; reason: 'server' };
 
-async function performRefresh(): Promise<boolean> {
+let refreshPromise: Promise<RefreshResult> | null = null;
+
+async function performRefresh(): Promise<RefreshResult> {
   try {
     const res = await fetch(`${API_URL}/auth/refresh`, {
       method: 'POST',
-      credentials: 'include', // cookie httpOnly vai automático
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
     });
 
-    if (!res.ok) return false;
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, reason: 'unauthorized' };
+    }
+
+    if (!res.ok) {
+      return { ok: false, reason: 'server' };
+    }
 
     const data = (await res.json()) as AuthResponse;
     tokenStore.set(data.accessToken, data.user);
-    return true;
+
+    // CORREÇÃO 42.4: Notifica as outras abas
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        'jm_refresh_event',
+        JSON.stringify({
+          accessToken: data.accessToken,
+          user: data.user,
+          timestamp: Date.now(),
+        }),
+      );
+    }
+
+    return { ok: true };
   } catch {
-    return false;
+    return { ok: false, reason: 'network' };
   }
 }
 
-async function tryRefresh(): Promise<boolean> {
+async function tryRefresh(): Promise<RefreshResult> {
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = performRefresh().finally(() => {
@@ -263,6 +281,20 @@ function forceLogout() {
       window.location.href = '/login';
     }
   }
+}
+
+// CORREÇÃO 42.4: Ouve mudanças de token de outras abas
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'jm_refresh_event' && event.newValue) {
+      try {
+        const { accessToken, user } = JSON.parse(event.newValue);
+        tokenStore.set(accessToken, user);
+      } catch {
+        // Ignora
+      }
+    }
+  });
 }
 
 // ----------------------------------------------------------
@@ -292,7 +324,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const doFetch = () =>
     fetch(`${API_URL}${path}`, {
       ...rest,
-      credentials: 'include', // cookie httpOnly vai automático
+      credentials: 'include',
       headers: buildHeaders(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -300,14 +332,23 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   let res = await doFetch();
 
   if (res.status === 401 && auth) {
-    const refreshed = await tryRefresh();
+    const refreshResult = await tryRefresh();
 
-    if (!refreshed) {
-      forceLogout();
+    if (!refreshResult.ok) {
+      if (refreshResult.reason === 'unauthorized') {
+        forceLogout();
+        const err = new Error(
+          'Sessão expirada. Faça login novamente.',
+        ) as Error & { status?: number };
+        err.status = 401;
+        throw err;
+      }
+
+      // Se for falha de rede/servidor, NÃO desloga, apenas avisa.
       const err = new Error(
-        'Sessão expirada. Faça login novamente.',
+        'Não foi possível renovar a sessão. Verifique sua conexão.',
       ) as Error & { status?: number };
-      err.status = 401;
+      err.status = 0;
       throw err;
     }
 
@@ -315,10 +356,27 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+
+  // CORREÇÃO 42.5: Trata respostas não-JSON (ex: HTML de erro do Fly.io)
+  let data: any = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = {
+        message: `A API retornou uma resposta inválida (HTTP ${res.status}).`,
+      };
+    }
+  }
 
   if (!res.ok) {
-    const message = data?.message ?? `Erro ${res.status}`;
+    const rawMessage = data?.message;
+    const message = Array.isArray(rawMessage)
+      ? rawMessage.join('; ')
+      : typeof rawMessage === 'string'
+        ? rawMessage
+        : `Erro HTTP ${res.status}`;
+
     const err = new Error(message) as Error & {
       status?: number;
       payload?: unknown;
@@ -347,11 +405,9 @@ export const api = {
 
   me: () => request<User>('/auth/me', { auth: true }),
 
-  // sem argumento — cookie vai automático
   logout: () =>
     request<{ success: boolean }>('/auth/logout', { method: 'POST' }),
 
-  // 🆕 Recuperação de senha
   forgotPassword: (email: string) =>
     request<{ ok: boolean; message: string }>('/auth/forgot-password', {
       method: 'POST',
@@ -406,7 +462,7 @@ export const api = {
     request<PlaybackResponse>(`/playback/${trackId}`, { auth: true }),
 
   // ============================================================
-  // ALUGUEL — produtos
+  // ALUGUEL
   // ============================================================
   listTrackRentalProducts: (trackId: string) =>
     request<RentalProduct[]>(`/tracks/${trackId}/rental-products`),
@@ -414,9 +470,6 @@ export const api = {
   listAlbumRentalProducts: (albumId: string) =>
     request<RentalProduct[]>(`/albums/${albumId}/rental-products`),
 
-  // ============================================================
-  // ALUGUEL — pedidos (com idempotência)
-  // ============================================================
   createRentalOrder: (productId: string, idempotencyKey?: string) =>
     request<RentalOrder>('/orders/rental', {
       method: 'POST',
@@ -441,7 +494,6 @@ export const api = {
         : undefined,
     }),
 
-  // Aluguel — pagamento simulado (só funciona em dev)
   mockPayRental: (orderId: string) =>
     request<{ order: any; rental: Rental }>(
       `/orders/${orderId}/mock-pay-rental`,
@@ -459,7 +511,6 @@ export const api = {
       auth: true,
     }),
 
-  // Aluguel — checkout via Mercado Pago
   createRentalCheckout: (orderId: string) =>
     request<{
       orderId: string;
@@ -467,8 +518,12 @@ export const api = {
       preferenceId: string;
     }>(`/checkout/rental/${orderId}`, { method: 'POST', auth: true }),
 
-  // Aluguel — listagem
   listMyRentals: () => request<Rental[]>('/me/rentals', { auth: true }),
+
+  getRentalOrderStatus: (orderId: string) =>
+    request<{ id: string; status: string }>(`/orders/${orderId}/status`, {
+      auth: true,
+    }),
 
   // ============================================================
   // PLANOS
@@ -484,7 +539,7 @@ export const api = {
   radioAccess: () => request<RadioAccess>('/radio/access', { auth: true }),
 
   // ============================================================
-  // ASSINATURAS (Mercado Pago)
+  // ASSINATURAS
   // ============================================================
   checkoutSubscription: (planId: string) =>
     request<{
@@ -572,7 +627,6 @@ export const api = {
   // ADMIN
   // ============================================================
 
-  // Dashboard
   adminDashboard: () =>
     request<{
       users: { total: number; newThisMonth: number };
@@ -585,7 +639,6 @@ export const api = {
       };
     }>('/admin/dashboard', { auth: true }),
 
-  // Users
   adminListUsers: (
     params: { q?: string; role?: string; page?: number; limit?: number } = {},
   ) => {
@@ -606,7 +659,6 @@ export const api = {
       { method: 'PATCH', body: { role }, auth: true },
     ),
 
-  // Catalog — Albums
   adminCreateAlbum: (input: {
     title: string;
     coverUrl?: string;
@@ -650,7 +702,6 @@ export const api = {
       },
     ),
 
-  // Catalog — Tracks
   adminCreateTrack: (input: {
     title: string;
     albumId?: string;
@@ -717,7 +768,6 @@ export const api = {
       auth: true,
     }),
 
-  // Subscriptions / Rentals
   adminListSubscriptions: () =>
     request<any[]>('/admin/subscriptions', { auth: true }),
 
