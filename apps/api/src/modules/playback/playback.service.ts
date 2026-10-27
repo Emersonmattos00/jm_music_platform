@@ -31,9 +31,6 @@ export class PlaybackService {
       throw new ForbiddenException(decision.reason);
     }
 
-    // Assinante/aluguel/admin → streamKey (qualidade cheia)
-    // Preview → previewKey (amostra de 30s)
-    // ⚠️ Sem fallback: se falta a key esperada, é erro (não serve preview pro assinante)
     const usePreview = decision.source === 'preview';
     const key = usePreview ? track.previewKey : track.streamKey;
 
@@ -47,10 +44,6 @@ export class PlaybackService {
 
     const { url, expiresAt } = await this.storage.getPlaybackUrl(key);
 
-    // Registra intent-to-play (auditoria).
-    // NOTA: `secondsPlayed: 0` porque o áudio ainda não tocou. Um endpoint
-    // separado (`POST /playback/:id/progress`) deve atualizar isso conforme
-    // o frontend reporta progresso (a cada 15-30s).
     if (userId) {
       await this.prisma.playbackEvent.create({
         data: {
@@ -70,6 +63,34 @@ export class PlaybackService {
       expiresAt,
       source: decision.source,
       isPreview: usePreview,
+    };
+  }
+
+  /**
+   * Atualiza o progresso de reprodução (segundos efetivamente tocados).
+   */
+  async updateProgress(trackId: string, userId: string, secondsPlayed: number) {
+    const event = await this.prisma.playbackEvent.findFirst({
+      where: { userId, trackId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!event) {
+      throw new NotFoundException(
+        'Evento de reprodução não encontrado. Inicie a reprodução primeiro.',
+      );
+    }
+
+    if (secondsPlayed > event.secondsPlayed) {
+      await this.prisma.playbackEvent.update({
+        where: { id: event.id },
+        data: { secondsPlayed },
+      });
+    }
+
+    return {
+      ok: true,
+      secondsPlayed: Math.max(secondsPlayed, event.secondsPlayed),
     };
   }
 }
