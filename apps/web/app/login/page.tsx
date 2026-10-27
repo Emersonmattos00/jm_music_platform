@@ -18,11 +18,19 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    // Normalização do e-mail
+    const normalizedEmail = email.trim().toLowerCase();
+
     try {
-      await login(email, password);
+      await login(normalizedEmail, password);
       router.push('/catalog');
-    } catch (err) {
-      setError((err as Error).message);
+    } catch (err: any) {
+      // Tratamento para casos em que a API retorna um array de erros (class-validator)
+      const message = Array.isArray(err?.message)
+        ? err.message[0]
+        : err?.message ?? 'Não foi possível entrar. Tente novamente.';
+      setError(message);
     } finally {
       setLoading(false);
     }

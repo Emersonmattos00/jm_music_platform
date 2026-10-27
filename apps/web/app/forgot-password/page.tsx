@@ -14,11 +14,18 @@ export default function ForgotPasswordPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    // Normalização do e-mail
+    const normalizedEmail = email.trim().toLowerCase();
+
     try {
-      await api.forgotPassword(email);
+      await api.forgotPassword(normalizedEmail);
       setSent(true);
-    } catch (err) {
-      setError((err as Error).message);
+    } catch (err: any) {
+      const message = Array.isArray(err?.message)
+        ? err.message[0]
+        : err?.message ?? 'Não foi possível enviar o e-mail. Tente novamente.';
+      setError(message);
     } finally {
       setLoading(false);
     }

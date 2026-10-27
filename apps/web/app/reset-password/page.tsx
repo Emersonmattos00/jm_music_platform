@@ -30,6 +30,17 @@ function ResetPasswordForm() {
     }
   }, [token]);
 
+  // Substitui o setTimeout por um useEffect com cleanup
+  useEffect(() => {
+    if (!success) return;
+
+    const timeout = window.setTimeout(() => {
+      router.replace('/login');
+    }, 3000);
+
+    return () => window.clearTimeout(timeout);
+  }, [success, router]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -51,9 +62,11 @@ function ResetPasswordForm() {
     try {
       await api.resetPassword(token, password);
       setSuccess(true);
-      setTimeout(() => router.push('/login'), 3000);
-    } catch (err) {
-      setError((err as Error).message);
+    } catch (err: any) {
+      const message = Array.isArray(err?.message)
+        ? err.message[0]
+        : err?.message ?? 'Não foi possível redefinir a senha.';
+      setError(message);
     } finally {
       setLoading(false);
     }

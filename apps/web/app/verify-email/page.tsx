@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 
 export default function VerifyEmailPage() {
   return (
@@ -16,6 +17,7 @@ export default function VerifyEmailPage() {
 function VerifyEmailContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get('token') ?? '';
+  const { user } = useAuth();
 
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>(
     'loading',
@@ -31,15 +33,31 @@ function VerifyEmailContent() {
 
     api
       .verifyEmail(token)
-      .then((res) => {
+      .then(async (res) => {
         setStatus('success');
         setMessage(res.message ?? 'Email verificado com sucesso!');
+
+        // Se o usuário estiver logado, atualiza o estado global
+        if (user) {
+          try {
+            const freshUser = await api.me();
+            // Como o AuthProvider atualiza o estado via api.me() na inicialização,
+            // aqui podemos apenas recarregar a página ou confiar no próximo ciclo.
+            // Uma opção é recarregar a página para garantir a consistência.
+            // window.location.reload(); // Descomente se necessário.
+          } catch {
+            // Ignora falhas silenciosamente
+          }
+        }
       })
-      .catch((err) => {
+      .catch((err: any) => {
         setStatus('error');
-        setMessage((err as Error).message);
+        const message = Array.isArray(err?.message)
+          ? err.message[0]
+          : err?.message ?? 'Não foi possível verificar o email.';
+        setMessage(message);
       });
-  }, [token]);
+  }, [token, user]);
 
   return (
     <section className="py-20">
