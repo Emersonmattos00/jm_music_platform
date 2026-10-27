@@ -101,19 +101,18 @@ export default function TrackPage() {
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
-              {isAuthenticated ? (
-                <button
-                  onClick={() => (current?.id === track.id ? toggle() : play(track))}
-                  className="px-5 py-3 rounded-lg font-bold bg-gold text-[#16130c] hover:bg-gold2 transition"
-                >
-                  {isThisPlaying ? '⏸ Pausar' : '▶ Tocar'}
-                </button>
-              ) : (
+              <button
+                onClick={() => (current?.id === track.id ? toggle() : play(track))}
+                className="px-5 py-3 rounded-lg font-bold bg-gold text-[#16130c] hover:bg-gold2 transition"
+              >
+                {isThisPlaying ? '⏸ Pausar' : '▶ Tocar'}
+              </button>
+              {!isAuthenticated && (
                 <Link
                   href="/login"
-                  className="px-5 py-3 rounded-lg font-bold bg-gold text-[#16130c] hover:bg-gold2 transition"
+                  className="px-5 py-3 rounded-lg border border-line hover:border-gold transition"
                 >
-                  Entrar para ouvir
+                  Entrar para ouvir completo
                 </Link>
               )}
               <Link
