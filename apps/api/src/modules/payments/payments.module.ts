@@ -1,11 +1,17 @@
 import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { PaymentsController } from './payments.controller';
-import { WebhooksController } from './webhooks.controller';
+import { PrismaModule } from '../../prisma/prisma.module';
+import { MercadopagoModule } from '../mercadopago/mercadopago.module';
+import { EntitlementModule } from '../entitlement/entitlement.module'; // <-- ADICIONE
 
 @Module({
-  controllers: [PaymentsController, WebhooksController],
+  imports: [
+    PrismaModule,
+    MercadopagoModule,
+    EntitlementModule, // <-- ADICIONE
+  ],
+  controllers: [PaymentsController],
   providers: [PaymentsService],
-  exports: [PaymentsService],
 })
 export class PaymentsModule {}

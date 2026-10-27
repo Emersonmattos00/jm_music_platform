@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'crypto';
@@ -13,6 +14,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MercadopagoService } from '../mercadopago/mercadopago.service';
+import { EntitlementService } from '../entitlement/entitlement.service';
 
 @Injectable()
 export class PaymentsService {
@@ -22,6 +24,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly mp: MercadopagoService,
     private readonly config: ConfigService,
+    private readonly entitlement: EntitlementService,
   ) {}
 
   // ----------------------------------------------------------
@@ -191,7 +194,7 @@ export class PaymentsService {
   }
 
   // ----------------------------------------------------------
-  // CANCELAR ASSINATURA
+  // CANCELAR ASSINATURA — CORREÇÃO 14
   // ----------------------------------------------------------
   async cancelSubscription(userId: string, subscriptionId: string) {
     const sub = await this.prisma.subscription.findUnique({
@@ -201,15 +204,21 @@ export class PaymentsService {
       throw new NotFoundException('Assinatura não encontrada');
     }
 
+    // Correção 14: Só marca como cancelado no banco se o MP confirmar.
     if (sub.externalSubscriptionId) {
       try {
         await this.mp.cancelPreapproval(sub.externalSubscriptionId);
       } catch (e) {
-        this.logger.warn(`Erro cancelando no MP: ${(e as Error).message}`);
+        this.logger.error(
+          `Falha ao cancelar assinatura ${sub.id} no Mercado Pago: ${(e as Error).message}`,
+        );
+        throw new ServiceUnavailableException(
+          'Não foi possível confirmar o cancelamento com o provedor. Tente novamente.',
+        );
       }
     }
 
-    return this.prisma.subscription.update({
+    const updated = await this.prisma.subscription.update({
       where: { id: sub.id },
       data: {
         status: SubscriptionStatus.CANCELLED,
@@ -217,6 +226,11 @@ export class PaymentsService {
       },
       include: { plan: true },
     });
+
+    // Correção 16: Invalida cache de permissões
+    await this.entitlement.invalidateUser(userId);
+
+    return updated;
   }
 
   // ----------------------------------------------------------
@@ -267,12 +281,10 @@ export class PaymentsService {
       },
     });
 
-    // Se já foi processado com sucesso → duplicate
     if (existing?.processedAt) {
       return { ok: true, duplicate: true };
     }
 
-    // Se não existe → cria com processedAt null (pending)
     if (!existing) {
       await this.prisma.paymentEvent.create({
         data: {
@@ -280,7 +292,6 @@ export class PaymentsService {
           externalEventId: String(eventId),
           eventType: String(payload?.type ?? payload?.topic ?? 'unknown'),
           payload,
-          // processedAt: null por padrão → ainda não processado
         },
       });
     }
@@ -295,7 +306,6 @@ export class PaymentsService {
         await this.handlePaymentEvent(String(resourceId));
       }
 
-      // Marca como processado SÓ após sucesso
       await this.prisma.paymentEvent.update({
         where: {
           provider_externalEventId: {
@@ -312,7 +322,6 @@ export class PaymentsService {
         `Erro processando webhook ${type}: ${(e as Error).message}`,
         (e as Error).stack,
       );
-      // Re-lança pra NestJS retornar 500 e o MP retentar
       throw e;
     }
   }
@@ -324,7 +333,6 @@ export class PaymentsService {
   }) {
     const secret = this.config.get<string>('MERCADOPAGO_WEBHOOK_SECRET');
 
-    // Em produção, exige secret
     if (this.config.get<string>('NODE_ENV') === 'production' && !secret) {
       throw new Error('MERCADOPAGO_WEBHOOK_SECRET é obrigatório em produção');
     }
@@ -384,16 +392,19 @@ export class PaymentsService {
         },
       });
       this.logger.log(`Assinatura ${sub.id} ATIVADA`);
+      await this.entitlement.invalidateUser(sub.userId);
     } else if (mp.status === 'cancelled') {
       await this.prisma.subscription.update({
         where: { id: sub.id },
         data: { status: SubscriptionStatus.CANCELLED },
       });
+      await this.entitlement.invalidateUser(sub.userId);
     } else if (mp.status === 'paused') {
       await this.prisma.subscription.update({
         where: { id: sub.id },
         data: { status: SubscriptionStatus.PAUSED },
       });
+      await this.entitlement.invalidateUser(sub.userId);
     }
   }
 
@@ -402,10 +413,8 @@ export class PaymentsService {
     const ref = payment.external_reference;
     if (!ref) return;
 
-    // Assinatura já é tratada em handlePreapprovalEvent
     if (ref.startsWith('sub-')) return;
 
-    // Aluguel: prefixo ord- (ou compat: UUID puro)
     const orderId = ref.startsWith('ord-') ? ref.slice(4) : ref;
 
     const order = await this.prisma.order.findUnique({
@@ -420,6 +429,27 @@ export class PaymentsService {
     if (payment.status === 'approved') {
       if (order.status === OrderStatus.PAID) return; // idempotência
 
+      // Correção 13: Validação de segurança financeira
+      const expectedReference = `ord-${order.id}`;
+      if (payment.external_reference !== expectedReference) {
+        this.logger.error(
+          `Referência incompatível no pagamento ${payment.id}. Esperado: ${expectedReference}, Recebido: ${payment.external_reference}`,
+        );
+        throw new BadRequestException('Referência de pagamento inválida');
+      }
+
+      const expectedAmount = order.totalCents / 100;
+      if (
+        payment.transaction_amount === undefined ||
+        Math.abs(payment.transaction_amount - expectedAmount) > 0.01 ||
+        payment.currency_id !== order.currency
+      ) {
+        this.logger.error(
+          `Valor ou moeda incompatível no pagamento ${payment.id}. Esperado: R$ ${expectedAmount} ${order.currency}, Recebido: R$ ${payment.transaction_amount} ${payment.currency_id}`,
+        );
+        throw new BadRequestException('Valor de pagamento incompatível');
+      }
+
       await this.prisma.$transaction(async (tx) => {
         await tx.order.update({
           where: { id: order.id },
@@ -433,7 +463,6 @@ export class PaymentsService {
         for (const item of order.items) {
           if (!item.productId) continue;
 
-          // productId é SEMPRE RentalProduct.id (faixa OU álbum)
           const product = await tx.rentalProduct.findUnique({
             where: { id: item.productId },
           });
@@ -449,7 +478,6 @@ export class PaymentsService {
             startsAt.getTime() + product.durationHours * 60 * 60 * 1000,
           );
 
-          // Caso 1: produto de FAIXA → cria 1 rental
           if (product.trackId) {
             await tx.rental.create({
               data: {
@@ -463,9 +491,7 @@ export class PaymentsService {
                 expiresAt,
               },
             });
-          }
-          // Caso 2: produto de ÁLBUM → cria N rentals (todas as faixas publicadas)
-          else if (product.albumId) {
+          } else if (product.albumId) {
             const albumTracks = await tx.track.findMany({
               where: {
                 albumId: product.albumId,
@@ -492,6 +518,7 @@ export class PaymentsService {
         }
       });
       this.logger.log(`Order ${order.id} paga → rentals criados`);
+      await this.entitlement.invalidateUser(order.userId);
     } else if (
       payment.status === 'refunded' ||
       payment.status === 'charged_back'
@@ -507,6 +534,7 @@ export class PaymentsService {
         }),
       ]);
       this.logger.log(`Order ${order.id} reembolsada → rentals cancelados`);
+      await this.entitlement.invalidateUser(order.userId);
     } else if (
       payment.status === 'rejected' ||
       payment.status === 'cancelled'

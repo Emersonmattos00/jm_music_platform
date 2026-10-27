@@ -30,6 +30,7 @@ export interface MpPaymentResponse {
     | 'charged_back';
   status_detail?: string;
   transaction_amount?: number;
+  currency_id?: string; // <-- ADICIONADO
   external_reference?: string;
   date_approved?: string;
   payment_method_id?: string;
