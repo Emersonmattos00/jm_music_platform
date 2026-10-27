@@ -84,7 +84,7 @@ export class MercadopagoService {
         frequency_type: frequencyType,
         transaction_amount: input.amountCents / 100,
         currency_id: input.currency,
-        repetitions: input.intervalUnit === 'year' ? 1 : undefined,
+        // Correção 15: Removido 'repetitions' para permitir renovação contínua.
       },
     };
 
