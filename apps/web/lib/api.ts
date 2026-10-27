@@ -729,3 +729,14 @@ export const api = {
       { auth: true },
     ),
 };
+
+export async function updatePlaybackProgress(
+  trackId: string,
+  secondsPlayed: number,
+): Promise<void> {
+  await request(`/playback/${trackId}/progress`, {
+    method: 'POST',
+    body: { secondsPlayed },
+    auth: true,
+  });
+}

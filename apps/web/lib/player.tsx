@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { api, PlaybackResponse, Track } from './api';
+import { api, PlaybackResponse, Track, updatePlaybackProgress } from './api';
 
 export type RepeatMode = 'off' | 'all' | 'one';
 
@@ -66,13 +66,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [isFullScreen, setIsFullScreen] = useState(false);
 
   // ─────────────────────────────────────────────────────
-  // CARREGAR FAIXA
-  // ─────────────────────────────────────────────────────
-    // ─────────────────────────────────────────────────────
-  // CARREGAR FAIXA
+  // REFS PARA CONTROLE
   // ─────────────────────────────────────────────────────
   const requestIdRef = useRef(0);
+  const currentRef = useRef<Track | null>(null);
+  const lastProgressSentRef = useRef(0);
 
+  // Sincroniza o currentRef para ser usado dentro do onTime (evita closure)
+  useEffect(() => {
+    currentRef.current = current;
+  }, [current]);
+
+  // ─────────────────────────────────────────────────────
+  // CARREGAR FAIXA
+  // ─────────────────────────────────────────────────────
   const loadTrack = useCallback(async (track: Track) => {
     const requestId = ++requestIdRef.current;
 
@@ -82,6 +89,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
+    lastProgressSentRef.current = 0; // Reseta o contador de progresso
 
     try {
       const info = await api.authorize(track.id);
@@ -203,7 +211,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     play(queue[i - 1], queue);
   }, [queue, findCurrentIndex, play]);
 
-    const handleEnded = useCallback(() => {
+  const handleEnded = useCallback(() => {
     if (!current) return;
     const a = audioRef.current;
     if (!a) return;
@@ -236,7 +244,25 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     audio.volume = volume;
     audioRef.current = audio;
 
-    const onTime = () => setCurrentTime(audio.currentTime);
+    const onTime = () => {
+      const t = audio.currentTime;
+      setCurrentTime(t);
+
+      const currentTrack = currentRef.current;
+      if (!currentTrack) return;
+
+      const shouldSend =
+        Math.floor(t) > 0 &&
+        Math.floor(t) - lastProgressSentRef.current >= 15;
+
+      if (shouldSend) {
+        lastProgressSentRef.current = Math.floor(t);
+        updatePlaybackProgress(currentTrack.id, Math.floor(t)).catch(() => {
+          // Falha silenciosa: progresso é "best effort", não crítico.
+        });
+      }
+    };
+
     const onLoaded = () => setDuration(audio.duration || 0);
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
