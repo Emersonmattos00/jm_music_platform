@@ -11,7 +11,7 @@ interface Props {
   track: Track;
   onClose: () => void;
   onConfirmed: () => void;
-  /** Abre o modal já na aba desejada. Default: 'track' */
+  onPlay: () => void; // <-- NOVO
   initialTab?: Tab;
 }
 
@@ -25,6 +25,7 @@ export function RentModal({
   track,
   onClose,
   onConfirmed,
+  onPlay, // <-- NOVO
   initialTab = 'track',
 }: Props) {
   const { isAuthenticated } = useAuth();
@@ -71,7 +72,6 @@ export function RentModal({
       );
     }
 
-    // Verifica acesso do usuário (se logado)
     if (isAuthenticated) {
       promises.push(
         Promise.all([
@@ -80,7 +80,6 @@ export function RentModal({
         ]).then(([rentals, subscription]) => {
           if (cancelled) return;
 
-          // Assinatura ativa?
           if (
             subscription &&
             subscription.status === 'ACTIVE' &&
@@ -91,7 +90,6 @@ export function RentModal({
             return;
           }
 
-          // Aluguel ativo da faixa OU do álbum?
           const now = new Date();
           const activeRental = rentals.find((r) => {
             if (r.status !== 'ACTIVE') return false;
@@ -134,11 +132,7 @@ export function RentModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, processing]);
 
-  // ------------------------------------------------------------
-  // CONTINUAR → cria pedido + cria preference do MP + redireciona
-  // ------------------------------------------------------------
-    async function handleContinue() {
-    // CORREÇÃO 21: Validações ANTES de ativar o estado de processamento.
+  async function handleContinue() {
     if (tab === 'track' && !selectedTrack) {
       setError('Selecione uma opção de aluguel.');
       return;
@@ -158,7 +152,6 @@ export function RentModal({
     setProcessing(true);
     setError(null);
 
-    // Idempotency-Key única pra essa tentativa.
     const idempotencyKey =
       typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
@@ -168,7 +161,6 @@ export function RentModal({
       let orderId: string;
 
       if (tab === 'track') {
-        // A validação já foi feita, então selectedTrack não é null.
         const order = await api.createRentalOrder(
           selectedTrack!,
           idempotencyKey,
@@ -176,7 +168,6 @@ export function RentModal({
         orderId = order.order.id;
       } else {
         const product = albumProducts.find((p) => p.id === selectedAlbum);
-        // A validação já foi feita.
         const order = await api.createAlbumRentalOrder(
           albumId!,
           product!.durationHours,
@@ -198,9 +189,8 @@ export function RentModal({
           ? e.message
           : 'Não foi possível iniciar o pagamento.',
       );
-      setProcessing(false); // Libera o botão em caso de erro.
+      setProcessing(false);
     }
-    // Não há finally: se o redirecionamento ocorrer, o componente é desmontado.
   }
 
   const cover = track.album?.coverUrl;
@@ -247,7 +237,10 @@ export function RentModal({
             </div>
 
             <button
-              onClick={onClose}
+              onClick={() => {
+                onPlay(); // <-- TOCA A FAIXA
+                onClose(); // <-- FECHA O MODAL
+              }}
               className="w-full py-4 rounded-xl font-bold bg-gold text-[#16130c] hover:bg-gold2 transition"
             >
               OUVIR AGORA
@@ -294,7 +287,10 @@ export function RentModal({
             </div>
 
             <button
-              onClick={onClose}
+              onClick={() => {
+                onPlay(); // <-- TOCA A FAIXA
+                onClose(); // <-- FECHA O MODAL
+              }}
               className="w-full py-4 rounded-xl font-bold bg-gold text-[#16130c] hover:bg-gold2 transition"
             >
               OUVIR AGORA

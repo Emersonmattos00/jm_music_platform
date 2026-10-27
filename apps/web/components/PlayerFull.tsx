@@ -521,14 +521,15 @@ export function PlayerFull() {
         </div>
       </div>
 
-      {/* Modal de aluguel */}
+      {/* Modal de aluguel — CORRIGIDO */}
       {rentOpen && current && (
         <RentModal
-          track={current}
+          track={current} // <-- Usa a faixa atual
           onClose={() => setRentOpen(false)}
-          onConfirmed={() => {
+          onConfirmed={() => setRentOpen(false)}
+          onPlay={() => {
+            play(current); // <-- Toca a faixa atual
             setRentOpen(false);
-            window.location.reload();
           }}
         />
       )}

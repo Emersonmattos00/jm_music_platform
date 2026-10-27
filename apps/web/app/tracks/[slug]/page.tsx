@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { api, Track } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { usePlayer } from '@/lib/player';
+import { RentModal } from '@/components/RentModal';
 
 export default function TrackPage() {
   const params = useParams();
@@ -16,6 +17,7 @@ export default function TrackPage() {
   const [track, setTrack] = useState<Track | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [rentTrack, setRentTrack] = useState<Track | null>(null);
 
   useEffect(() => {
     if (!slug) return;
@@ -107,6 +109,15 @@ export default function TrackPage() {
               >
                 {isThisPlaying ? '⏸ Pausar' : '▶ Tocar'}
               </button>
+
+              {/* Botão de Alugar */}
+              <button
+                onClick={() => setRentTrack(track)}
+                className="px-5 py-3 rounded-lg font-bold border border-gold text-gold hover:bg-gold/10 transition"
+              >
+                🔒 Alugar esta faixa
+              </button>
+
               {!isAuthenticated && (
                 <Link
                   href="/login"
@@ -146,7 +157,7 @@ export default function TrackPage() {
                   </Link>
                 </div>
               )}
-                            {(track as any).isrc && (
+              {(track as any).isrc && (
                 <div>
                   <strong className="text-text">ISRC:</strong>{' '}
                   <span className="font-mono">{(track as any).isrc}</span>
@@ -162,6 +173,20 @@ export default function TrackPage() {
           </div>
         </div>
       </div>
+
+      {/* Modal de Aluguel */}
+      {rentTrack && (
+        <RentModal
+          track={rentTrack}
+          initialTab="track" // <-- CORRIGIDO: sempre 'track' para página de faixa
+          onClose={() => setRentTrack(null)}
+          onConfirmed={() => setRentTrack(null)}
+          onPlay={() => {
+            play(rentTrack); // <-- TOCA A FAIXA
+            setRentTrack(null); // <-- FECHA O MODAL
+          }}
+        />
+      )}
     </section>
   );
 }

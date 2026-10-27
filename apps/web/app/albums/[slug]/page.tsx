@@ -10,7 +10,7 @@ import { RentModal } from '@/components/RentModal';
 import { formatYear, formatPrice } from '@/lib/format';
 
 interface AlbumDetail extends Album {
-  upc: string | null;        // 🆕
+  upc: string | null;
   tracks: Track[];
 }
 
@@ -18,7 +18,8 @@ export default function AlbumPage() {
   const params = useParams();
   const slug = typeof params.slug === 'string' ? params.slug : '';
 
-  const { playQueue, current, isPlaying, toggle } = usePlayer();
+  // CORREÇÃO: Adicionado 'play' na desestruturação
+  const { play, playQueue, current, isPlaying, toggle } = usePlayer();
   const { isAuthenticated } = useAuth();
 
   const [album, setAlbum] = useState<AlbumDetail | null>(null);
@@ -76,7 +77,7 @@ export default function AlbumPage() {
     playQueue(tracks, 0);
   }
 
-    function handlePlayTrack(track: Track) {
+  function handlePlayTrack(track: Track) {
     if (current?.id === track.id) {
       toggle();
       return;
@@ -86,7 +87,6 @@ export default function AlbumPage() {
 
     if (index < 0) {
       // Proteção: a faixa não pertence a este álbum.
-      // Evita tocar a primeira faixa por engano (findIndex retorna -1).
       return;
     }
 
@@ -261,9 +261,10 @@ export default function AlbumPage() {
             tracks.length > 0 && tracks[0].id === rentTrack.id ? 'album' : 'track'
           }
           onClose={() => setRentTrack(null)}
-          onConfirmed={() => {
+          onConfirmed={() => setRentTrack(null)}
+          onPlay={() => {
+            play(rentTrack);
             setRentTrack(null);
-            window.location.reload();
           }}
         />
       )}
