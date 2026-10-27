@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto'; // <-- ADICIONADO
 import {
   OrderStatus,
   RentalStatus,
@@ -108,7 +108,7 @@ export class PaymentsService {
   // ----------------------------------------------------------
   // CRIAR CHECKOUT DE ALUGUEL (pagamento avulso)
   // ----------------------------------------------------------
-    async createRentalCheckout(userId: string, orderId: string) {
+  async createRentalCheckout(userId: string, orderId: string) {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
     });
@@ -276,7 +276,7 @@ export class PaymentsService {
   }
 
   // ----------------------------------------------------------
-  // WEBHOOK — retry-safe + idempotente
+  // WEBHOOK — CORREÇÃO 46.3 (P2002)
   // ----------------------------------------------------------
   async handleWebhook(
     payload: any,
@@ -286,7 +286,6 @@ export class PaymentsService {
       manifest?: string;
     },
   ) {
-    // Valida assinatura HMAC em produção
     if (this.config.get<string>('NODE_ENV') === 'production') {
       this.verifySignature(signature);
     }
@@ -310,14 +309,25 @@ export class PaymentsService {
     }
 
     if (!existing) {
-      await this.prisma.paymentEvent.create({
-        data: {
-          provider: 'mercadopago',
-          externalEventId: String(eventId),
-          eventType: String(payload?.type ?? payload?.topic ?? 'unknown'),
-          payload,
-        },
-      });
+      try {
+        await this.prisma.paymentEvent.create({
+          data: {
+            provider: 'mercadopago',
+            externalEventId: String(eventId),
+            eventType: String(payload?.type ?? payload?.topic ?? 'unknown'),
+            payload,
+          },
+        });
+      } catch (error: any) {
+        // CORREÇÃO 46.3: Trata colisão P2002 (dois webhooks simultâneos)
+        if (error.code === 'P2002') {
+          this.logger.warn(
+            `Webhook duplicado detectado (P2002): ${eventId}`,
+          );
+          return { ok: true, duplicate: true };
+        }
+        throw error;
+      }
     }
 
     const type = payload?.type ?? payload?.topic;
@@ -350,6 +360,9 @@ export class PaymentsService {
     }
   }
 
+  // ----------------------------------------------------------
+  // VALIDAÇÃO DE ASSINATURA — CORREÇÃO 46.2
+  // ----------------------------------------------------------
   private verifySignature(sig?: {
     xSignature?: string;
     xRequestId?: string;
@@ -382,7 +395,18 @@ export class PaymentsService {
       .find(([k]) => k?.trim() === 'v1')?.[1]
       ?.trim();
 
-    if (!v1 || v1 !== expected) {
+    if (!v1) {
+      throw new BadRequestException('Assinatura v1 ausente');
+    }
+
+    // CORREÇÃO 46.2: Comparação timing-safe
+    const v1Buffer = Buffer.from(v1, 'utf-8');
+    const expectedBuffer = Buffer.from(expected, 'utf-8');
+
+    if (
+      v1Buffer.length !== expectedBuffer.length ||
+      !timingSafeEqual(v1Buffer, expectedBuffer)
+    ) {
       this.logger.error('Assinatura do webhook inválida');
       throw new BadRequestException('Assinatura inválida');
     }
@@ -474,15 +498,27 @@ export class PaymentsService {
         throw new BadRequestException('Valor de pagamento incompatível');
       }
 
+      // CORREÇÃO 46.4: Transação atômica com updateMany condicional
       await this.prisma.$transaction(async (tx) => {
-        await tx.order.update({
-          where: { id: order.id },
+        const claimed = await tx.order.updateMany({
+          where: {
+            id: order.id,
+            status: OrderStatus.PENDING,
+          },
           data: {
             status: OrderStatus.PAID,
             paidAt: new Date(),
             externalPaymentId: String(payment.id),
           },
         });
+
+        // Se count === 0, outra requisição já processou o pedido
+        if (claimed.count === 0) {
+          this.logger.warn(
+            `Order ${order.id} já foi processado por outra requisição (idempotência).`,
+          );
+          return;
+        }
 
         for (const item of order.items) {
           if (!item.productId) continue;

@@ -1,8 +1,10 @@
 import {
+  BadGatewayException,
   BadRequestException,
   Injectable,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -51,6 +53,26 @@ export class MercadopagoService {
     if (!res.ok) {
       this.logger.error(`MP ${res.status} em ${path}: ${text}`);
       const message = data?.message ?? `Erro MP ${res.status}`;
+
+      // CORREÇÃO 46.8: Distingue os tipos de erro do Mercado Pago
+      if (res.status === 404) {
+        throw new NotFoundException(message);
+      }
+      if (res.status === 401 || res.status === 403) {
+        throw new BadGatewayException(
+          'Credenciais do Mercado Pago inválidas ou sem permissão.',
+        );
+      }
+      if (res.status === 429) {
+        throw new ServiceUnavailableException(
+          'Limite de requisições ao Mercado Pago excedido. Tente novamente em instantes.',
+        );
+      }
+      if (res.status >= 500) {
+        throw new ServiceUnavailableException(
+          'Mercado Pago indisponível no momento. Tente novamente mais tarde.',
+        );
+      }
       throw new BadRequestException(message);
     }
 
@@ -95,13 +117,10 @@ export class MercadopagoService {
   }
 
   async getPreapproval(id: string): Promise<MpPreapprovalResponse> {
-    try {
-      return await this.mpFetch<MpPreapprovalResponse>(`/preapproval/${id}`, {
-        method: 'GET',
-      });
-    } catch {
-      throw new NotFoundException(`Preapproval ${id} não encontrado`);
-    }
+    // CORREÇÃO 46.8: o mpFetch já lança o erro correto (404, 401, 5xx)
+    return this.mpFetch<MpPreapprovalResponse>(`/preapproval/${id}`, {
+      method: 'GET',
+    });
   }
 
   async cancelPreapproval(id: string): Promise<MpPreapprovalResponse> {
