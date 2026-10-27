@@ -21,6 +21,7 @@ import { NewsletterModule } from './modules/newsletter/newsletter.module';
 import { MercadopagoModule } from './modules/mercadopago/mercadopago.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { HealthModule } from './modules/health/health.module'; // <-- NOVO
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { AdminModule } from './modules/admin/admin.module';
     NewsletterModule,
     PaymentsModule,
     AdminModule,
+    HealthModule, // <-- NOVO
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
