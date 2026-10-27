@@ -37,8 +37,12 @@ function RentalsContent() {
     };
   }, []);
 
+  // CORREÇÃO 38: Separa os estados explicitamente
   const active = rentals.filter((r) => r.status === 'ACTIVE');
-  const expired = rentals.filter((r) => r.status !== 'ACTIVE');
+  const pending = rentals.filter((r) => r.status === 'PENDING');
+  const history = rentals.filter(
+    (r) => r.status === 'EXPIRED' || r.status === 'CANCELLED',
+  );
 
   return (
     <section className="py-14">
@@ -86,14 +90,31 @@ function RentalsContent() {
           </div>
         )}
 
-        {/* Expirados / cancelados */}
-        {expired.length > 0 && (
+        {/* Pendentes (aguardando pagamento) */}
+        {pending.length > 0 && (
+          <div className="mb-10">
+            <h2 className="text-lg font-bold mb-4 text-gold2">
+              Pendentes ({pending.length})
+            </h2>
+            <p className="text-sm text-muted mb-4">
+              Estes pedidos estão aguardando a confirmação do pagamento.
+            </p>
+            <div className="space-y-3">
+              {pending.map((r) => (
+                <RentalCard key={r.id} rental={r} expired />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Histórico (expirados/cancelados) */}
+        {history.length > 0 && (
           <div>
             <h2 className="text-lg font-bold mb-4 text-muted">
-              Histórico ({expired.length})
+              Histórico ({history.length})
             </h2>
             <div className="space-y-3">
-              {expired.map((r) => (
+              {history.map((r) => (
                 <RentalCard key={r.id} rental={r} expired />
               ))}
             </div>
