@@ -62,7 +62,8 @@ export class AdminService {
         tracks: totalTracks,
         publishedTracks,
       },
-      revenue: {
+      // Correção 32.2: Renomeado de 'revenue' para 'grossRevenue'
+      grossRevenue: {
         monthCents: paidOrdersThisMonth._sum.totalCents ?? 0,
         monthOrders: paidOrdersThisMonth._count,
       },
@@ -118,13 +119,12 @@ export class AdminService {
     return { data, meta: buildPagination(page, limit, total) };
   }
 
-    async updateUserRole(
+  async updateUserRole(
     userId: string,
     role: 'CUSTOMER' | 'ADMIN',
     adminId: string,
   ) {
     // Correção 31.1: Impede a autodespromoção acidental.
-    // Um admin não pode remover o próprio acesso administrativo.
     if (userId === adminId && role !== 'ADMIN') {
       throw new BadRequestException(
         'Você não pode remover sua própria permissão de administrador.',
@@ -174,6 +174,10 @@ export class AdminService {
     const grouped = await this.prisma.playbackEvent.groupBy({
       by: ['trackId'],
       _count: { trackId: true },
+      where: {
+        // Correção 32.1: Conta apenas eventos com segundos tocados > 0.
+        secondsPlayed: { gt: 0 },
+      },
       orderBy: { _count: { trackId: 'desc' } },
       take: limit,
     });
@@ -191,6 +195,7 @@ export class AdminService {
 
     const trackMap = new Map(tracks.map((t) => [t.id, t]));
 
+    // Retorna os dados combinados
     return grouped.map((g) => ({
       track: trackMap.get(g.trackId) ?? null,
       plays: g._count.trackId,
