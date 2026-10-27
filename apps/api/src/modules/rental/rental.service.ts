@@ -1,11 +1,13 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
   OrderStatus,
+  Prisma,
   ProductType,
   RentalStatus,
   SubscriptionStatus,
@@ -159,7 +161,7 @@ export class RentalService {
   }
 
   // ----------------------------------------------------------
-  // CRIAR PEDIDO DE FAIXA
+  // CRIAR PEDIDO DE FAIXA — CORREÇÃO 19 e 20
   // ----------------------------------------------------------
   async createTrackRentalOrder(
     userId: string,
@@ -171,6 +173,7 @@ export class RentalService {
         where: { idempotencyKey },
         select: {
           id: true,
+          userId: true, // <-- ADICIONADO
           status: true,
           totalCents: true,
           currency: true,
@@ -186,9 +189,23 @@ export class RentalService {
       });
 
       if (existing) {
-        const product = existing.items[0]?.productId
+        // CORREÇÃO 19: Valida se o pedido pertence ao usuário.
+        if (existing.userId !== userId) {
+          throw new ConflictException(
+            'A chave de idempotência já está associada a outra operação.',
+          );
+        }
+
+        const existingProductId = existing.items[0]?.productId;
+        if (existingProductId !== productId) {
+          throw new ConflictException(
+            'A chave de idempotência já foi usada para outro produto.',
+          );
+        }
+
+        const product = existingProductId
           ? await this.prisma.rentalProduct.findUnique({
-              where: { id: existing.items[0].productId },
+              where: { id: existingProductId },
               select: {
                 id: true,
                 name: true,
@@ -245,51 +262,120 @@ export class RentalService {
     const finalKey =
       idempotencyKey ?? `rental-track-${userId}-${productId}-${Date.now()}`;
 
-    const order = await this.prisma.order.create({
-      data: {
-        userId,
-        status: OrderStatus.PENDING,
-        totalCents: product.priceCents,
-        currency: product.currency,
-        idempotencyKey: finalKey,
-        items: {
-          create: [
-            {
-              productType: ProductType.RENTAL,
-              productId: product.id,
-              quantity: 1,
-              unitPriceCents: product.priceCents,
-            },
-          ],
+    try {
+      const order = await this.prisma.order.create({
+        data: {
+          userId,
+          status: OrderStatus.PENDING,
+          totalCents: product.priceCents,
+          currency: product.currency,
+          idempotencyKey: finalKey,
+          items: {
+            create: [
+              {
+                productType: ProductType.RENTAL,
+                productId: product.id,
+                quantity: 1,
+                unitPriceCents: product.priceCents,
+              },
+            ],
+          },
         },
-      },
-      select: {
-        id: true,
-        status: true,
-        totalCents: true,
-        currency: true,
-        createdAt: true,
-      },
-    });
+        select: {
+          id: true,
+          status: true,
+          totalCents: true,
+          currency: true,
+          createdAt: true,
+        },
+      });
 
-    return {
-      order,
-      product: {
-        id: product.id,
-        name: product.name,
-        durationHours: product.durationHours,
-        priceCents: product.priceCents,
-      },
-      track: {
-        id: product.track.id,
-        title: product.track.title,
-      },
-      idempotent: false,
-    };
+      return {
+        order,
+        product: {
+          id: product.id,
+          name: product.name,
+          durationHours: product.durationHours,
+          priceCents: product.priceCents,
+        },
+        track: { id: product.track.id, title: product.track.title },
+        idempotent: false,
+      };
+    } catch (error) {
+      // CORREÇÃO 20: Trata colisão de idempotência (P2002).
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const existing = await this.prisma.order.findUnique({
+          where: { idempotencyKey: finalKey },
+          select: {
+            id: true,
+            userId: true,
+            status: true,
+            totalCents: true,
+            currency: true,
+            createdAt: true,
+            items: {
+              select: {
+                productId: true,
+                productType: true,
+                unitPriceCents: true,
+              },
+            },
+          },
+        });
+
+        if (existing && existing.userId === userId) {
+          const product = existing.items[0]?.productId
+            ? await this.prisma.rentalProduct.findUnique({
+                where: { id: existing.items[0].productId },
+                select: {
+                  id: true,
+                  name: true,
+                  durationHours: true,
+                  priceCents: true,
+                  trackId: true,
+                },
+              })
+            : null;
+
+          const track = product?.trackId
+            ? await this.prisma.track.findUnique({
+                where: { id: product.trackId },
+                select: { id: true, title: true },
+              })
+            : null;
+
+          return {
+            order: {
+              id: existing.id,
+              status: existing.status,
+              totalCents: existing.totalCents,
+              currency: existing.currency,
+              createdAt: existing.createdAt,
+            },
+            product: product
+              ? {
+                  id: product.id,
+                  name: product.name,
+                  durationHours: product.durationHours,
+                  priceCents: product.priceCents,
+                }
+              : null,
+            track,
+            idempotent: true,
+          };
+        }
+
+        throw new ConflictException('Pedido duplicado detectado.');
+      }
+      throw error;
+    }
   }
 
   // ----------------------------------------------------------
-  // CRIAR PEDIDO DE ÁLBUM
+  // CRIAR PEDIDO DE ÁLBUM — CORREÇÃO 19 e 20
   // ----------------------------------------------------------
   async createAlbumRentalOrder(
     userId: string,
@@ -302,23 +388,30 @@ export class RentalService {
         where: { idempotencyKey },
         select: {
           id: true,
+          userId: true, // <-- ADICIONADO
           status: true,
           totalCents: true,
           currency: true,
           createdAt: true,
+          items: { select: { productId: true } },
         },
       });
 
       if (existing) {
+        // CORREÇÃO 19: Valida se o pedido pertence ao usuário.
+        if (existing.userId !== userId) {
+          throw new ConflictException(
+            'A chave de idempotência já está associada a outra operação.',
+          );
+        }
+
         const album = await this.prisma.album.findUnique({
           where: { id: albumId },
           select: {
             id: true,
             title: true,
             _count: {
-              select: {
-                tracks: { where: { status: TrackStatus.PUBLISHED } },
-              },
+              select: { tracks: { where: { status: TrackStatus.PUBLISHED } } },
             },
           },
         });
@@ -360,19 +453,14 @@ export class RentalService {
       throw new BadRequestException('Álbum sem faixas publicadas');
     }
 
-    // Busca o RentalProduct (produto do álbum)
     let product = await this.prisma.rentalProduct.findFirst({
       where: { albumId, durationHours, active: true },
       select: { id: true, priceCents: true, currency: true },
     });
 
-    // Fallback: se não existir produto, cria um com preço hardcoded
     if (!product) {
       const fallbackPrice = FALLBACK_ALBUM_PRICES[durationHours];
-      if (!fallbackPrice) {
-        throw new BadRequestException('Duração inválida');
-      }
-
+      if (!fallbackPrice) throw new BadRequestException('Duração inválida');
       product = await this.prisma.rentalProduct.create({
         data: {
           albumId,
@@ -393,45 +481,87 @@ export class RentalService {
       idempotencyKey ??
       `rental-album-${userId}-${albumId}-${durationHours}-${Date.now()}`;
 
-    // 1 OrderItem apontando pro RentalProduct (não pra Track)
-    const order = await this.prisma.order.create({
-      data: {
-        userId,
-        status: OrderStatus.PENDING,
-        totalCents: product.priceCents,
-        currency: product.currency,
-        idempotencyKey: finalKey,
-        items: {
-          create: [
-            {
-              productType: ProductType.RENTAL,
-              productId: product.id,
-              quantity: 1,
-              unitPriceCents: product.priceCents,
-            },
-          ],
+    try {
+      const order = await this.prisma.order.create({
+        data: {
+          userId,
+          status: OrderStatus.PENDING,
+          totalCents: product.priceCents,
+          currency: product.currency,
+          idempotencyKey: finalKey,
+          items: {
+            create: [
+              {
+                productType: ProductType.RENTAL,
+                productId: product.id,
+                quantity: 1,
+                unitPriceCents: product.priceCents,
+              },
+            ],
+          },
         },
-      },
-      select: {
-        id: true,
-        status: true,
-        totalCents: true,
-        currency: true,
-        createdAt: true,
-      },
-    });
+        select: {
+          id: true,
+          status: true,
+          totalCents: true,
+          currency: true,
+          createdAt: true,
+        },
+      });
 
-    return {
-      order,
-      album: {
-        id: album.id,
-        title: album.title,
-        trackCount: album.tracks.length,
-        durationHours,
-        priceCents: product.priceCents,
-      },
-      idempotent: false,
-    };
+      return {
+        order,
+        album: {
+          id: album.id,
+          title: album.title,
+          trackCount: album.tracks.length,
+          durationHours,
+          priceCents: product.priceCents,
+        },
+        idempotent: false,
+      };
+    } catch (error) {
+      // CORREÇÃO 20: Trata colisão de idempotência (P2002).
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const existing = await this.prisma.order.findUnique({
+          where: { idempotencyKey: finalKey },
+          select: {
+            id: true,
+            userId: true,
+            status: true,
+            totalCents: true,
+            currency: true,
+            createdAt: true,
+          },
+        });
+
+        if (existing && existing.userId === userId) {
+          return {
+            order: {
+              id: existing.id,
+              status: existing.status,
+              totalCents: existing.totalCents,
+              currency: existing.currency,
+              createdAt: existing.createdAt,
+            },
+            album: {
+              id: album.id,
+              title: album.title,
+              trackCount: album.tracks.length,
+              durationHours,
+              priceCents: existing.totalCents,
+            },
+            idempotent: true,
+          };
+        }
+
+        throw new ConflictException('Pedido duplicado detectado.');
+      }
+      throw error;
+    }
   }
 
   // ----------------------------------------------------------
