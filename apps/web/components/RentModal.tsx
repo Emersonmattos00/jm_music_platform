@@ -137,7 +137,24 @@ export function RentModal({
   // ------------------------------------------------------------
   // CONTINUAR → cria pedido + cria preference do MP + redireciona
   // ------------------------------------------------------------
-  async function handleContinue() {
+    async function handleContinue() {
+    // CORREÇÃO 21: Validações ANTES de ativar o estado de processamento.
+    if (tab === 'track' && !selectedTrack) {
+      setError('Selecione uma opção de aluguel.');
+      return;
+    }
+    if (tab === 'album') {
+      if (!selectedAlbum || !albumId) {
+        setError('Selecione uma opção válida para o álbum.');
+        return;
+      }
+      const product = albumProducts.find((p) => p.id === selectedAlbum);
+      if (!product) {
+        setError('Duração inválida.');
+        return;
+      }
+    }
+
     setProcessing(true);
     setError(null);
 
@@ -151,22 +168,18 @@ export function RentModal({
       let orderId: string;
 
       if (tab === 'track') {
-        if (!selectedTrack) return;
+        // A validação já foi feita, então selectedTrack não é null.
         const order = await api.createRentalOrder(
-          selectedTrack,
+          selectedTrack!,
           idempotencyKey,
         );
         orderId = order.order.id;
       } else {
-        if (!selectedAlbum || !albumId) return;
         const product = albumProducts.find((p) => p.id === selectedAlbum);
-        if (!product) {
-          setError('Duração inválida');
-          return;
-        }
+        // A validação já foi feita.
         const order = await api.createAlbumRentalOrder(
-          albumId,
-          product.durationHours,
+          albumId!,
+          product!.durationHours,
           idempotencyKey,
         );
         orderId = order.order.id;
@@ -174,18 +187,20 @@ export function RentModal({
 
       const checkout = await api.createRentalCheckout(orderId);
 
-      if (!checkout.checkoutUrl) {
-        setError(
-          'Não foi possível iniciar o pagamento. Verifique se o Mercado Pago está configurado.',
-        );
-        return;
+      if (checkout.checkoutUrl) {
+        window.location.href = checkout.checkoutUrl;
+      } else {
+        throw new Error('Não foi possível gerar o link de pagamento.');
       }
-
-      window.location.href = checkout.checkoutUrl;
     } catch (e) {
-      setError((e as Error).message);
-      setProcessing(false);
+      setError(
+        e instanceof Error
+          ? e.message
+          : 'Não foi possível iniciar o pagamento.',
+      );
+      setProcessing(false); // Libera o botão em caso de erro.
     }
+    // Não há finally: se o redirecionamento ocorrer, o componente é desmontado.
   }
 
   const cover = track.album?.coverUrl;
