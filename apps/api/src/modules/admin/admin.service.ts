@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { SubscriptionStatus, RentalStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { buildPagination, Paginated } from '../../common/pagination';
@@ -118,7 +118,19 @@ export class AdminService {
     return { data, meta: buildPagination(page, limit, total) };
   }
 
-  async updateUserRole(userId: string, role: 'CUSTOMER' | 'ADMIN') {
+    async updateUserRole(
+    userId: string,
+    role: 'CUSTOMER' | 'ADMIN',
+    adminId: string,
+  ) {
+    // Correção 31.1: Impede a autodespromoção acidental.
+    // Um admin não pode remover o próprio acesso administrativo.
+    if (userId === adminId && role !== 'ADMIN') {
+      throw new BadRequestException(
+        'Você não pode remover sua própria permissão de administrador.',
+      );
+    }
+
     return this.prisma.user.update({
       where: { id: userId },
       data: { role },

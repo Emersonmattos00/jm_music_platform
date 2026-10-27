@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Param,
-  Patch,
-  Post,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Get, Patch, Post, Body, Param, Query, UseGuards, Req } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AdminGuard } from '../auth/guards/admin.guard';
@@ -29,9 +20,13 @@ export class AdminController {
     return this.admin.listUsers(query);
   }
 
-  @Patch('users/:id/role')
-  updateUserRole(@Param('id') id: string, @Body() dto: UpdateUserRoleDto) {
-    return this.admin.updateUserRole(id, dto.role);
+    @Patch('users/:id/role')
+  updateUserRole(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserRoleDto,
+    @Req() req: any, // Injetando a requisição para pegar o admin logado
+  ) {
+    return this.admin.updateUserRole(id, dto.role, req.user.id);
   }
 
   @Get('subscriptions')
