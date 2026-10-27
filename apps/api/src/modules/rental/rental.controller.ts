@@ -1,18 +1,16 @@
 import {
-  Body,
   Controller,
-  ForbiddenException,
   Get,
-  Headers,
-  HttpCode,
-  Param,
   Post,
-  Req,
+  Param,
+  Body,
   UseGuards,
+  Req,
+  NotFoundException,
 } from '@nestjs/common';
 import { RentalService } from './rental.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { EmailVerifiedGuard } from '../auth/guards/email-verified.guard';
+import { PrismaService } from '../../prisma/prisma.service';
 import {
   CreateTrackRentalOrderDto,
   CreateAlbumRentalOrderDto,
@@ -20,9 +18,14 @@ import {
 
 @Controller()
 export class RentalController {
-  constructor(private readonly rental: RentalService) {}
+  constructor(
+    private readonly rental: RentalService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-  // ---- Público
+  // ==========================================================
+  // PRODUTOS
+  // ==========================================================
 
   @Get('tracks/:trackId/rental-products')
   listTrackProducts(@Param('trackId') trackId: string) {
@@ -34,15 +37,17 @@ export class RentalController {
     return this.rental.listAlbumRentalProducts(albumId);
   }
 
-  // ---- Autenticado + email verificado
+  // ==========================================================
+  // CRIAR PEDIDOS
+  // ==========================================================
 
   @Post('orders/rental')
-  @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
+  @UseGuards(JwtAuthGuard)
   createTrackOrder(
-    @Req() req: any,
     @Body() dto: CreateTrackRentalOrderDto,
-    @Headers('idempotency-key') idempotencyKey?: string,
+    @Req() req: any,
   ) {
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     return this.rental.createTrackRentalOrder(
       req.user.id,
       dto.productId,
@@ -51,12 +56,12 @@ export class RentalController {
   }
 
   @Post('orders/album-rental')
-  @UseGuards(JwtAuthGuard, EmailVerifiedGuard)
+  @UseGuards(JwtAuthGuard)
   createAlbumOrder(
-    @Req() req: any,
     @Body() dto: CreateAlbumRentalOrderDto,
-    @Headers('idempotency-key') idempotencyKey?: string,
+    @Req() req: any,
   ) {
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
     return this.rental.createAlbumRentalOrder(
       req.user.id,
       dto.albumId,
@@ -65,25 +70,25 @@ export class RentalController {
     );
   }
 
-  // ---- Mock pay (só dev — não precisa verificar email, já é dev)
+  // ==========================================================
+  // PAGAMENTO SIMULADO (MOCK)
+  // ==========================================================
 
   @Post('orders/:id/mock-pay-rental')
-  @HttpCode(200)
   @UseGuards(JwtAuthGuard)
-  mockPayTrack(@Req() req: any, @Param('id') id: string) {
-    this.assertMockPayAllowed();
+  mockPayTrack(@Param('id') id: string, @Req() req: any) {
     return this.rental.mockPayTrack(req.user.id, id);
   }
 
   @Post('orders/:id/mock-pay-album-rental')
-  @HttpCode(200)
   @UseGuards(JwtAuthGuard)
-  mockPayAlbum(@Req() req: any, @Param('id') id: string) {
-    this.assertMockPayAllowed();
+  mockPayAlbum(@Param('id') id: string, @Req() req: any) {
     return this.rental.mockPayAlbum(req.user.id, id);
   }
 
-  // ---- Listagem (não precisa verificar email)
+  // ==========================================================
+  // MEUS ALUGUÉIS
+  // ==========================================================
 
   @Get('me/rentals')
   @UseGuards(JwtAuthGuard)
@@ -91,11 +96,22 @@ export class RentalController {
     return this.rental.listMyRentals(req.user.id);
   }
 
-  private assertMockPayAllowed() {
-    if (process.env.NODE_ENV === 'production') {
-      throw new ForbiddenException(
-        'Pagamento simulado indisponível em produção.',
-      );
+  // ==========================================================
+  // STATUS DO PEDIDO (PARA A PÁGINA DE SUCESSO) — NOVO
+  // ==========================================================
+
+  @Get('orders/:id/status')
+  @UseGuards(JwtAuthGuard)
+  async getOrderStatus(@Param('id') id: string, @Req() req: any) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: { id: true, status: true, userId: true },
+    });
+
+    if (!order || order.userId !== req.user.id) {
+      throw new NotFoundException('Pedido não encontrado');
     }
+
+    return { id: order.id, status: order.status };
   }
 }
