@@ -6,6 +6,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { StorageService } from '../storage/storage.service';
 
 export interface EntitlementResult {
   allowed: boolean;
@@ -22,6 +23,7 @@ export class EntitlementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -30,53 +32,49 @@ export class EntitlementService {
    *   2. Admin?
    *   3. Assinatura ativa?
    *   4. Aluguel ativo (faixa ou álbum)?
-   *   5. Preview público existe?
+   *   5. Preview público existe (no storage)?
    *
-   * Cache em Redis com TTL de 30s para reduzir load no Postgres.
+   * Cache em Redis com TTL de 30s. Cache inclui negativas, por isso
+   * invalidateUser é obrigatório ao mudar assinatura/aluguel.
    */
   async canPlay(
     userId: string | null,
     trackId: string,
   ): Promise<EntitlementResult> {
-    // Anônimo: pula cache (não tem nada mutável pra cachear)
     if (!userId) {
       return this.computeEntitlement(null, trackId);
     }
 
     const cacheKey = `ent:${userId}:${trackId}`;
 
-    // CORREÇÃO 19.2: Fallback para o PostgreSQL se o Redis falhar.
     try {
       const cached = await this.redis.get<EntitlementResult>(cacheKey);
-      if (cached) {
-        return cached;
-      }
+      if (cached) return cached;
     } catch (error) {
-      // Se o Redis estiver fora do ar, apenas loga e segue para o banco.
       this.logger.warn(
         `Falha ao ler cache do Redis (user ${userId}, track ${trackId}). Caindo para o PostgreSQL.`,
-        error,
+        error as any,
       );
     }
 
     const result = await this.computeEntitlement(userId, trackId);
 
-    // Salva no cache em background (fire-and-forget), ignorando erros.
     void this.redis
       .setex(cacheKey, CACHE_TTL_SECONDS, result)
-      .catch((error) => {
+      .catch((error) =>
         this.logger.warn(
           `Falha ao salvar cache no Redis (user ${userId}, track ${trackId}).`,
-          error,
-        );
-      });
+          error as any,
+        ),
+      );
 
     return result;
   }
 
   /**
    * Invalida o cache de um usuário específico.
-   * Chame depois de: cancelar assinatura, reembolsar pedido, expirar aluguel.
+   * Chame depois de: cancelar assinatura, confirmar pagamento (webhook),
+   * reembolsar pedido, criar aluguel, expirar aluguel manualmente.
    */
   async invalidateUser(userId: string): Promise<void> {
     try {
@@ -89,7 +87,7 @@ export class EntitlementService {
     } catch (error) {
       this.logger.error(
         `Falha ao invalidar cache no Redis (user ${userId}).`,
-        error,
+        error as any,
       );
     }
   }
@@ -150,10 +148,17 @@ export class EntitlementService {
         select: { id: true },
       });
       if (sub) {
+        if (await this.anyAudioExists(track)) {
+          return {
+            allowed: true,
+            reason: 'Assinatura ativa',
+            source: 'subscription',
+          };
+        }
         return {
-          allowed: true,
-          reason: 'Assinatura ativa',
-          source: 'subscription',
+          allowed: false,
+          reason: 'Áudio indisponível no storage',
+          source: 'none',
         };
       }
     }
@@ -175,12 +180,19 @@ export class EntitlementService {
         select: { id: true },
       });
       if (rental) {
-        return { allowed: true, reason: 'Aluguel ativo', source: 'rental' };
+        if (await this.anyAudioExists(track)) {
+          return { allowed: true, reason: 'Aluguel ativo', source: 'rental' };
+        }
+        return {
+          allowed: false,
+          reason: 'Áudio indisponível no storage',
+          source: 'none',
+        };
       }
     }
 
-    // 5. Preview público
-    if (track.previewKey) {
+    // 5. Preview público (confirma no storage)
+    if (track.previewKey && (await this.storage.exists(track.previewKey))) {
       return { allowed: true, reason: 'Preview público', source: 'preview' };
     }
 
@@ -189,5 +201,18 @@ export class EntitlementService {
       reason: 'Sem assinatura, aluguel ou preview disponível',
       source: 'none',
     };
+  }
+
+  private async anyAudioExists(track: {
+    streamKey: string | null;
+    previewKey: string | null;
+  }): Promise<boolean> {
+    if (track.streamKey && (await this.storage.exists(track.streamKey))) {
+      return true;
+    }
+    if (track.previewKey && (await this.storage.exists(track.previewKey))) {
+      return true;
+    }
+    return false;
   }
 }

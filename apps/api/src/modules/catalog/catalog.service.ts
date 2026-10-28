@@ -1,16 +1,22 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { TrackStatus } from '@prisma/client';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, TrackStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { buildPagination, Paginated } from '../../common/pagination';
 import { ListTracksQueryDto } from './dto/list-tracks-query.dto';
 import { CreateAlbumDto } from './dto/create-album.dto';
 import { UpdateAlbumDto } from './dto/update-album.dto';
 import { CreateTrackDto } from './dto/create-track.dto';
 import { UpdateTrackDto } from './dto/update-track.dto';
-import { normalizeISRC, normalizeUPC } from '../../common/validators/isrc-upc.validator';
+import {
+  normalizeISRC,
+  normalizeUPC,
+} from '../../common/validators/isrc-upc.validator';
 
-// Campos que PODEM ser expostos ao público.
-// NUNCA incluir previewKey, streamKey ou masterKey aqui.
 const PUBLIC_TRACK_SELECT = {
   id: true,
   title: true,
@@ -27,9 +33,14 @@ const PUBLIC_TRACK_SELECT = {
   album: { select: { id: true, title: true, slug: true, coverUrl: true } },
 } as const;
 
+const MAX_TRACK_NUMBER_RETRIES = 5;
+
 @Injectable()
 export class CatalogService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   // ============================================================
   // PÚBLICO
@@ -40,18 +51,21 @@ export class CatalogService {
     const limit = query.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const where: any = { status: TrackStatus.PUBLISHED };
+    const where: Prisma.TrackWhereInput = { status: TrackStatus.PUBLISHED };
 
     if (query.genre) where.genre = query.genre;
     if (query.mood) where.mood = query.mood;
 
     if (query.q) {
-      where.OR = [
-        { title: { contains: query.q, mode: 'insensitive' } },
-        { genre: { contains: query.q, mode: 'insensitive' } },
-        { mood: { contains: query.q, mode: 'insensitive' } },
-        { artist: { name: { contains: query.q, mode: 'insensitive' } } },
-      ];
+      const term = query.q.trim();
+      if (term.length > 0) {
+        where.OR = [
+          { title: { contains: term, mode: 'insensitive' } },
+          { genre: { contains: term, mode: 'insensitive' } },
+          { mood: { contains: term, mode: 'insensitive' } },
+          { artist: { name: { contains: term, mode: 'insensitive' } } },
+        ];
+      }
     }
 
     const [total, data] = await Promise.all([
@@ -79,6 +93,7 @@ export class CatalogService {
 
   async listPublicAlbums() {
     return this.prisma.album.findMany({
+      where: { tracks: { some: { status: TrackStatus.PUBLISHED } } },
       orderBy: [{ sortOrder: 'asc' }, { releaseDate: 'desc' }],
       select: {
         id: true,
@@ -87,7 +102,9 @@ export class CatalogService {
         coverUrl: true,
         upc: true,
         releaseDate: true,
-        artist: { select: { id: true, name: true, slug: true, imageUrl: true } },
+        artist: {
+          select: { id: true, name: true, slug: true, imageUrl: true },
+        },
         _count: {
           select: { tracks: { where: { status: TrackStatus.PUBLISHED } } },
         },
@@ -105,7 +122,9 @@ export class CatalogService {
         coverUrl: true,
         upc: true,
         releaseDate: true,
-        artist: { select: { id: true, name: true, slug: true, imageUrl: true } },
+        artist: {
+          select: { id: true, name: true, slug: true, imageUrl: true },
+        },
         tracks: {
           where: { status: TrackStatus.PUBLISHED },
           select: PUBLIC_TRACK_SELECT,
@@ -127,6 +146,7 @@ export class CatalogService {
         bio: true,
         imageUrl: true,
         albums: {
+          where: { tracks: { some: { status: TrackStatus.PUBLISHED } } },
           orderBy: [{ sortOrder: 'asc' }, { releaseDate: 'desc' }],
           select: {
             id: true,
@@ -135,7 +155,9 @@ export class CatalogService {
             coverUrl: true,
             releaseDate: true,
             _count: {
-              select: { tracks: { where: { status: TrackStatus.PUBLISHED } } },
+              select: {
+                tracks: { where: { status: TrackStatus.PUBLISHED } },
+              },
             },
           },
         },
@@ -188,7 +210,7 @@ export class CatalogService {
     });
     if (!album) throw new NotFoundException('Álbum não encontrado');
 
-    const updateData: any = {};
+    const updateData: Prisma.AlbumUpdateInput = {};
 
     if (data.title !== undefined) {
       updateData.title = data.title;
@@ -234,51 +256,80 @@ export class CatalogService {
       artistId = defaultArtist.id;
     }
 
-    let trackNumber: number | null = null;
-    if (dto.albumId) {
-      const max = await this.prisma.track.aggregate({
-        where: { albumId: dto.albumId },
-        _max: { trackNumber: true },
-      });
-      trackNumber = (max._max.trackNumber ?? 0) + 1;
+    return this.createTrackWithRetryOnTrackNumber(slug, artistId, dto);
+  }
+
+  private async createTrackWithRetryOnTrackNumber(
+    initialSlug: string,
+    artistId: string,
+    dto: CreateTrackDto,
+  ): Promise<any> {
+    let slug = initialSlug;
+
+    for (let attempt = 0; attempt < MAX_TRACK_NUMBER_RETRIES; attempt++) {
+      let trackNumber: number | null = null;
+      if (dto.albumId) {
+        const max = await this.prisma.track.aggregate({
+          where: { albumId: dto.albumId },
+          _max: { trackNumber: true },
+        });
+        trackNumber = (max._max.trackNumber ?? 0) + 1;
+      }
+
+      try {
+        return await this.prisma.track.create({
+          data: {
+            title: dto.title,
+            slug,
+            trackNumber,
+            albumId: dto.albumId,
+            artistId,
+            isrc: normalizeISRC(dto.isrc),
+            upc: normalizeUPC(dto.upc),
+            genre: dto.genre,
+            mood: dto.mood,
+            durationSeconds: dto.durationSeconds,
+            status: TrackStatus.DRAFT,
+          },
+          select: {
+            id: true,
+            title: true,
+            slug: true,
+            trackNumber: true,
+            isrc: true,
+            upc: true,
+            status: true,
+            genre: true,
+            mood: true,
+            durationSeconds: true,
+            createdAt: true,
+            artist: { select: { id: true, name: true } },
+            album: { select: { id: true, title: true, slug: true } },
+          },
+        });
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          if (attempt === 0) {
+            slug = await this.generateUniqueSlug('track', dto.title);
+          }
+          continue;
+        }
+        throw err;
+      }
     }
 
-    return this.prisma.track.create({
-      data: {
-        title: dto.title,
-        slug,
-        trackNumber,
-        albumId: dto.albumId,
-        artistId,
-        isrc: normalizeISRC(dto.isrc),
-        upc: normalizeUPC(dto.upc),
-        genre: dto.genre,
-        mood: dto.mood,
-        durationSeconds: dto.durationSeconds,
-        status: TrackStatus.DRAFT,
-      },
-      select: {
-        id: true,
-        title: true,
-        slug: true,
-        trackNumber: true,
-        isrc: true,
-        upc: true,
-        status: true,
-        genre: true,
-        mood: true,
-        durationSeconds: true,
-        createdAt: true,
-        artist: { select: { id: true, name: true } },
-        album: { select: { id: true, title: true, slug: true } },
-      },
-    });
+    throw new ConflictException(
+      'Não foi possível alocar número de faixa. Tente novamente.',
+    );
   }
 
   async updateTrack(id: string, data: UpdateTrackDto) {
     await this.ensureTrackExists(id);
 
-    const updateData: any = {};
+    const updateData: Prisma.TrackUpdateInput = {};
 
     if (data.title !== undefined) {
       updateData.title = data.title;
@@ -302,32 +353,29 @@ export class CatalogService {
     });
   }
 
-    async publishTrack(id: string) {
+  async publishTrack(id: string) {
     const track = await this.prisma.track.findUnique({
       where: { id },
-      select: {
-        id: true,
-        streamKey: true,
-      },
+      select: { id: true, streamKey: true },
     });
 
-    if (!track) {
-      throw new NotFoundException('Faixa não encontrada');
-    }
+    if (!track) throw new NotFoundException('Faixa não encontrada');
 
-    // Correção 34: Não permite publicar faixa sem áudio de streaming.
-    // A existência da chave no banco já é um bom indicador, mas o ideal
-    // seria verificar também se o objeto existe no storage.
     if (!track.streamKey?.trim()) {
       throw new ConflictException(
         'Não é possível publicar uma faixa sem áudio de streaming.',
       );
     }
 
-    // Cria os produtos de aluguel antes de publicar
+    const exists = await this.storage.exists(track.streamKey);
+    if (!exists) {
+      throw new ConflictException(
+        'O arquivo de áudio não foi encontrado no storage. Faça o upload novamente antes de publicar.',
+      );
+    }
+
     await this.ensureRentalProducts(id);
 
-    // Só então publica
     return this.prisma.track.update({
       where: { id },
       data: { status: TrackStatus.PUBLISHED },
@@ -385,12 +433,12 @@ export class CatalogService {
     if (existing > 0) return;
 
     const tiers = [
-      { hours: 24,  name: '24 horas', priceCents: 290,  sortOrder: 1 },
-      { hours: 48,  name: '48 horas', priceCents: 490,  sortOrder: 2 },
-      { hours: 72,  name: '3 dias',   priceCents: 690,  sortOrder: 3 },
-      { hours: 120, name: '5 dias',   priceCents: 990,  sortOrder: 4 },
-      { hours: 240, name: '10 dias',  priceCents: 1290, sortOrder: 5 },
-      { hours: 360, name: '15 dias',  priceCents: 1990, sortOrder: 6 },
+      { hours: 24, name: '24 horas', priceCents: 290, sortOrder: 1 },
+      { hours: 48, name: '48 horas', priceCents: 490, sortOrder: 2 },
+      { hours: 72, name: '3 dias', priceCents: 690, sortOrder: 3 },
+      { hours: 120, name: '5 dias', priceCents: 990, sortOrder: 4 },
+      { hours: 240, name: '10 dias', priceCents: 1290, sortOrder: 5 },
+      { hours: 360, name: '15 dias', priceCents: 1990, sortOrder: 6 },
     ];
 
     await this.prisma.rentalProduct.createMany({
@@ -432,7 +480,6 @@ export class CatalogService {
     let candidate = base;
     let n = 1;
 
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const existing =
         kind === 'album'
@@ -460,7 +507,6 @@ export class CatalogService {
     let candidate = base;
     let n = 1;
 
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const existing =
         kind === 'album'
