@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -34,6 +35,7 @@ const PUBLIC_TRACK_SELECT = {
 } as const;
 
 const MAX_TRACK_NUMBER_RETRIES = 5;
+const MAX_RELEASE_YEAR = 2030;
 
 @Injectable()
 export class CatalogService {
@@ -178,6 +180,28 @@ export class CatalogService {
   // ============================================================
 
   async createAlbum(dto: CreateAlbumDto) {
+    // Validação de releaseDate
+    if (dto.releaseDate) {
+      const date = new Date(dto.releaseDate);
+      if (isNaN(date.getTime())) {
+        throw new BadRequestException('Data de lançamento inválida.');
+      }
+      if (date.getFullYear() > MAX_RELEASE_YEAR) {
+        throw new BadRequestException('Data de lançamento muito no futuro.');
+      }
+    }
+
+    // Validação de artistId
+    if (dto.artistId) {
+      const artist = await this.prisma.artist.findUnique({
+        where: { id: dto.artistId },
+        select: { id: true },
+      });
+      if (!artist) {
+        throw new BadRequestException('Artista não encontrado.');
+      }
+    }
+
     const slug = await this.generateUniqueSlug('album', dto.title);
 
     let artistId = dto.artistId;
@@ -243,6 +267,28 @@ export class CatalogService {
   }
 
   async createTrack(dto: CreateTrackDto) {
+    // Validação de albumId (evita P2003)
+    if (dto.albumId) {
+      const album = await this.prisma.album.findUnique({
+        where: { id: dto.albumId },
+        select: { id: true },
+      });
+      if (!album) {
+        throw new BadRequestException('Álbum não encontrado.');
+      }
+    }
+
+    // Validação de artistId
+    if (dto.artistId) {
+      const artist = await this.prisma.artist.findUnique({
+        where: { id: dto.artistId },
+        select: { id: true },
+      });
+      if (!artist) {
+        throw new BadRequestException('Artista não encontrado.');
+      }
+    }
+
     const slug = await this.generateUniqueSlug('track', dto.title);
 
     let artistId = dto.artistId;
@@ -356,7 +402,7 @@ export class CatalogService {
   async publishTrack(id: string) {
     const track = await this.prisma.track.findUnique({
       where: { id },
-      select: { id: true, streamKey: true },
+      select: { id: true, streamKey: true, previewKey: true },
     });
 
     if (!track) throw new NotFoundException('Faixa não encontrada');
@@ -364,6 +410,12 @@ export class CatalogService {
     if (!track.streamKey?.trim()) {
       throw new ConflictException(
         'Não é possível publicar uma faixa sem áudio de streaming.',
+      );
+    }
+
+    if (!track.previewKey?.trim()) {
+      throw new ConflictException(
+        'Não é possível publicar uma faixa sem preview. Faça o upload do preview antes de publicar.',
       );
     }
 
@@ -393,6 +445,10 @@ export class CatalogService {
   }
 
   async reorderAlbumTracks(albumId: string, orderedIds: string[]) {
+    if (new Set(orderedIds).size !== orderedIds.length) {
+      throw new BadRequestException('IDs duplicados na ordenação.');
+    }
+
     const album = await this.prisma.album.findUnique({
       where: { id: albumId },
       select: { id: true },
