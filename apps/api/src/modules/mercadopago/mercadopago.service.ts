@@ -54,7 +54,6 @@ export class MercadopagoService {
       this.logger.error(`MP ${res.status} em ${path}: ${text}`);
       const message = data?.message ?? `Erro MP ${res.status}`;
 
-      // CORREÇÃO 46.8: Distingue os tipos de erro do Mercado Pago
       if (res.status === 404) {
         throw new NotFoundException(message);
       }
@@ -92,8 +91,22 @@ export class MercadopagoService {
     intervalCount: number;
     backUrl: string;
   }): Promise<MpPreapprovalResponse> {
+    // CORREÇÃO 46.9: valida periodicidade
+    if (input.intervalUnit === 'year' && input.intervalCount > 1) {
+      throw new BadRequestException(
+        'Planos anuais com mais de 1 ano não são suportados.',
+      );
+    }
+    if (input.intervalCount < 1) {
+      throw new BadRequestException('Intervalo do plano inválido.');
+    }
+
+    // CORREÇÃO 46.10: respeita o intervalCount (antes era sempre 1)
+    // O Mercado Pago só entende "months" como frequency_type.
+    // Então 'year' vira 12 meses, e 'month' com count 3 vira 3 meses.
     const frequencyType = 'months';
-    const frequency = input.intervalUnit === 'year' ? 12 : 1;
+    const frequency =
+      input.intervalUnit === 'year' ? 12 : input.intervalCount;
 
     const body = {
       reason: input.reason,
@@ -106,7 +119,7 @@ export class MercadopagoService {
         frequency_type: frequencyType,
         transaction_amount: input.amountCents / 100,
         currency_id: input.currency,
-        // Correção 15: Removido 'repetitions' para permitir renovação contínua.
+        // Sem 'repetitions' → renovação contínua até cancelamento.
       },
     };
 
@@ -117,7 +130,6 @@ export class MercadopagoService {
   }
 
   async getPreapproval(id: string): Promise<MpPreapprovalResponse> {
-    // CORREÇÃO 46.8: o mpFetch já lança o erro correto (404, 401, 5xx)
     return this.mpFetch<MpPreapprovalResponse>(`/preapproval/${id}`, {
       method: 'GET',
     });
@@ -131,7 +143,7 @@ export class MercadopagoService {
   }
 
   // ----------------------------------------------------------
-  // PREFERENCE (Pagamento avulso — para aluguéis)
+  // PREFERENCE (Pagamento avulso — aluguéis)
   // ----------------------------------------------------------
   async createPreference(input: {
     reason: string;

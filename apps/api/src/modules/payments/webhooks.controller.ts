@@ -24,17 +24,15 @@ export class WebhooksController {
     const payload =
       body?.type || body?.topic ? body : { ...query, ...body };
 
-    // Monta a string de validação do HMAC exatamente como o MP espera:
-    // id:<data.id>;request-id:<x-request-id>;ts:<ts>;
     const dataId = payload?.data?.id ?? query?.['data.id'] ?? '';
     const ts = this.extractTs(xSignature);
-    const manifest = `id:${dataId};request-id:${xRequestId ?? ''};ts:${ts};`;
 
-    return this.payments.handleWebhook(payload, {
-      xSignature,
-      xRequestId,
-      manifest,
-    });
+    return this.payments.handleWebhook(
+      payload,
+      { xSignature, xRequestId },
+      dataId,
+      ts,
+    );
   }
 
   private extractTs(xSignature?: string): string {
