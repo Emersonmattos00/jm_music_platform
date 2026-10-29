@@ -33,3 +33,16 @@ export function formatCompactNumber(n: number): string {
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
+
+/**
+ * Formata uma duração em segundos para o formato mm:ss.
+ * Ex.: 225 → "3:45"
+ *      null/undefined → "0:00"
+ */
+export function formatTime(seconds: number | null | undefined): string {
+  if (!seconds || isNaN(seconds) || seconds < 0) return '0:00';
+  const total = Math.floor(seconds);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
