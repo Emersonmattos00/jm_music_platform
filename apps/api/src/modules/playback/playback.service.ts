@@ -1,4 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { EntitlementService } from '../entitlement/entitlement.service';
@@ -20,6 +24,7 @@ export class PlaybackService {
         slug: true,
         previewKey: true,
         streamKey: true,
+        durationSeconds: true,
       },
     });
 
@@ -31,15 +36,24 @@ export class PlaybackService {
       throw new ForbiddenException(decision.reason);
     }
 
-    const usePreview = decision.source === 'preview';
+    // Decidir fonte com base no que REALMENTE existe no storage,
+    // não apenas no que está no banco.
+    const streamExists = await this.storage.exists(track.streamKey);
+    const previewExists = await this.storage.exists(track.previewKey);
+
+    if (!streamExists && !previewExists) {
+      throw new NotFoundException(
+        'Áudio indisponível no momento. Contate o suporte.',
+      );
+    }
+
+    const wantsPreviewOnly = decision.source === 'preview';
+    const usePreview = wantsPreviewOnly || (!streamExists && previewExists);
+
     const key = usePreview ? track.previewKey : track.streamKey;
 
     if (!key) {
-      throw new ForbiddenException(
-        usePreview
-          ? 'Preview não disponível para esta faixa.'
-          : 'Áudio completo indisponível no momento. Contate o suporte.',
-      );
+      throw new NotFoundException('Áudio indisponível no momento.');
     }
 
     const { url, expiresAt } = await this.storage.getPlaybackUrl(key);
@@ -49,7 +63,7 @@ export class PlaybackService {
         data: {
           userId,
           trackId,
-          source: decision.source,
+          source: usePreview ? 'preview' : decision.source,
           secondsPlayed: 0,
         },
       });
@@ -61,18 +75,42 @@ export class PlaybackService {
       slug: track.slug,
       url,
       expiresAt,
-      source: decision.source,
+      source: usePreview ? 'preview' : decision.source,
       isPreview: usePreview,
     };
   }
 
   /**
    * Atualiza o progresso de reprodução (segundos efetivamente tocados).
+   * - Limita à duração conhecida da faixa (se houver).
+   * - Usa updateMany com condição `lt` para evitar regressão sob concorrência.
    */
-  async updateProgress(trackId: string, userId: string, secondsPlayed: number) {
+  async updateProgress(
+    trackId: string,
+    userId: string,
+    secondsPlayed: number,
+  ) {
+    const track = await this.prisma.track.findUnique({
+      where: { id: trackId },
+      select: { durationSeconds: true },
+    });
+
+    if (!track) throw new NotFoundException('Faixa não encontrada');
+
+    const max =
+      track.durationSeconds != null
+        ? track.durationSeconds
+        : Number.POSITIVE_INFINITY;
+
+    const safeSeconds = Math.min(
+      Math.max(0, Math.floor(secondsPlayed)),
+      max,
+    );
+
     const event = await this.prisma.playbackEvent.findFirst({
       where: { userId, trackId },
       orderBy: { createdAt: 'desc' },
+      select: { id: true, secondsPlayed: true },
     });
 
     if (!event) {
@@ -81,16 +119,14 @@ export class PlaybackService {
       );
     }
 
-    if (secondsPlayed > event.secondsPlayed) {
-      await this.prisma.playbackEvent.update({
-        where: { id: event.id },
-        data: { secondsPlayed },
-      });
-    }
+    // Atualização atômica: só grava se for maior que o valor atual.
+    await this.prisma.playbackEvent.updateMany({
+      where: { id: event.id, secondsPlayed: { lt: safeSeconds } },
+      data: { secondsPlayed: safeSeconds },
+    });
 
-    return {
-      ok: true,
-      secondsPlayed: Math.max(secondsPlayed, event.secondsPlayed),
-    };
+    const finalSeconds = Math.max(safeSeconds, event.secondsPlayed);
+
+    return { ok: true, secondsPlayed: finalSeconds };
   }
 }

@@ -1,31 +1,33 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
-  S3Client,
-  PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
-  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-type StorageDriver = 'rustfs' | 'b2';
+type StorageDriver = 'b2' | 's3' | 'rustfs';
 
 @Injectable()
-export class StorageService implements OnModuleInit {
+export class StorageService {
+  private readonly logger = new Logger(StorageService.name);
+
+  private driver: StorageDriver = 'b2';
   private client!: S3Client;
   private bucket!: string;
   private publicBaseUrl: string | null = null;
-  private uploadExpires!: number;
-  private playbackExpires!: number;
-  private imageExpires!: number;
-  private driver!: StorageDriver;
+
+  private uploadExpires = 900;
+  private playbackExpires = 1800;
+  private imageExpires = 31536000;
 
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit() {
-    const driver = (this.config.get<string>('STORAGE_DRIVER', 'rustfs') ??
-      'rustfs') as StorageDriver;
+    const driver = (this.config.get<string>('STORAGE_DRIVER', 'b2') ??
+      'b2') as StorageDriver;
     this.driver = driver;
 
     if (driver === 'b2') {
@@ -62,21 +64,18 @@ export class StorageService implements OnModuleInit {
       });
     }
 
-    this.uploadExpires = parseInt(
+    this.uploadExpires = Number(
       this.config.get<string>('SIGNED_URL_UPLOAD_EXPIRES', '900'),
-      10,
     );
-    this.playbackExpires = parseInt(
-      this.config.get<string>('SIGNED_URL_PLAYBACK_EXPIRES', '1800'), // 🆕 subiu de 300 → 1800
-      10,
+    this.playbackExpires = Number(
+      this.config.get<string>('SIGNED_URL_PLAYBACK_EXPIRES', '1800'),
     );
-    this.imageExpires = parseInt(
+    this.imageExpires = Number(
       this.config.get<string>('SIGNED_URL_IMAGE_EXPIRES', '31536000'),
-      10,
     );
 
-    console.log(
-      `   Storage: ${this.driver.toUpperCase()} • bucket: ${this.bucket}`,
+    this.logger.log(
+      `Storage: ${this.driver.toUpperCase()} • bucket: ${this.bucket}`,
     );
   }
 
@@ -88,20 +87,44 @@ export class StorageService implements OnModuleInit {
     return this.bucket;
   }
 
-  async getUploadUrl(key: string, contentType: string): Promise<string> {
-    if (!key) throw new Error('Key obrigatória');
-    const command = new PutObjectCommand({
-      Bucket: this.bucket,
-      Key: key,
-      ContentType: contentType,
-    });
-    return getSignedUrl(this.client, command, {
-      expiresIn: this.uploadExpires,
-    });
+  /**
+   * Verifica se um objeto existe no bucket configurado.
+   * Retorna false em 404/NotFound; relança outros erros.
+   */
+async exists(key: string | null | undefined): Promise<boolean> {
+  if (!key) return false;
+  try {
+    await this.client.send(
+      new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    return true;
+  } catch (err: any) {
+    const status = err?.$metadata?.httpStatusCode;
+    if (
+      status === 404 ||
+      err?.name === 'NotFound' ||
+      err?.Code === 'NotFound' ||
+      err?.name === 'NoSuchKey'
+    ) {
+      return false;
+    }
+    // 403/erro de credencial: loga e assume otimista para não derrubar o playback.
+    this.logger.warn(
+      `Falha ao verificar ${key} (assumindo existente): ${err?.message ?? err}`,
+    );
+    return true;
+  }
+}
+
+  /**
+   * Alias de compatibilidade: media.service.ts e outros módulos
+   * chamam objectExists(). Mantém a mesma semântica de exists().
+   */
+  async objectExists(key: string | null | undefined): Promise<boolean> {
+    return this.exists(key);
   }
 
   async getPlaybackUrl(key: string): Promise<{ url: string; expiresAt: Date }> {
-    if (!key) throw new Error('Key obrigatória'); // 🆕
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: key,
@@ -115,35 +138,26 @@ export class StorageService implements OnModuleInit {
     };
   }
 
-  async getImageUrl(key: string): Promise<string> {
-    if (!key) throw new Error('Key obrigatória'); // 🆕
-    // Se tiver URL pública configurada, usa direto (mais rápido)
-    if (this.publicBaseUrl) {
-      return `${this.publicBaseUrl.replace(/\/$/, '')}/${key}`;
-    }
-    const command = new GetObjectCommand({
+  async getUploadUrl(
+    key: string,
+    contentType: string,
+  ): Promise<{ url: string; expiresAt: Date }> {
+    const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
+      ContentType: contentType,
     });
-    return getSignedUrl(this.client, command, { expiresIn: this.imageExpires });
+    const url = await getSignedUrl(this.client, command, {
+      expiresIn: this.uploadExpires,
+    });
+    return {
+      url,
+      expiresAt: new Date(Date.now() + this.uploadExpires * 1000),
+    };
   }
 
-  async objectExists(key: string): Promise<boolean> {
-    if (!key) return false;
-    try {
-      await this.client.send(
-        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async deleteObject(key: string): Promise<void> {
-    if (!key) return;
-    await this.client.send(
-      new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
-    );
+  getPublicImageUrl(key: string): string | null {
+    if (!this.publicBaseUrl) return null;
+    return `${this.publicBaseUrl.replace(/\/$/, '')}/${key.replace(/^\//, '')}`;
   }
 }

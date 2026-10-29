@@ -159,6 +159,7 @@ model Track {
   @@index([artistId])
   @@index([albumId, trackNumber])
   @@map("tracks")
+  @@unique([albumId, trackNumber])
 }
 
 // ============================================================

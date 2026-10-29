@@ -216,6 +216,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!a) return;
 
     if (playbackInfo?.isPreview) {
+      // CORREÇÃO: Reseta o tempo para o próximo play começar do zero
+      a.currentTime = 0;
       setIsPlaying(false);
       return;
     }
@@ -301,51 +303,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     a.volume = muted ? 0 : volume;
   }, [volume, muted]);
 
-  // ─────────────────────────────────────────────────────
-  // RENOVAÇÃO AUTOMÁTICA DA URL ASSINADA (CORREÇÃO 47.4)
-  // ─────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!current || !playbackInfo || !isPlaying) return;
-    if (!playbackInfo.expiresAt) return;
-
-    const expiresAt = new Date(playbackInfo.expiresAt).getTime();
-    const now = Date.now();
-    const timeUntilExpiry = expiresAt - now;
-
-    // Renova 30 segundos antes de expirar
-    const renewIn = Math.max(timeUntilExpiry - 30_000, 0);
-
-    const timer = setTimeout(async () => {
-      try {
-        const currentTrack = currentRef.current;
-        if (!currentTrack) return;
-
-        const newInfo = await api.authorize(currentTrack.id);
-
-        const audio = audioRef.current;
-        if (audio && newInfo.url) {
-          const wasPlaying = !audio.paused;
-          const savedTime = audio.currentTime;
-
-          audio.src = newInfo.url;
-          audio.load();
-
-          // Restaura a posição para não reiniciar a faixa
-          audio.currentTime = savedTime;
-
-          if (wasPlaying) {
-            await audio.play().catch(() => undefined);
-          }
-        }
-
-        setPlaybackInfo(newInfo);
-      } catch {
-        // Se falhar, o áudio continua com a URL antiga até expirar.
-      }
-    }, renewIn);
-
-    return () => clearTimeout(timer);
-  }, [current, playbackInfo, isPlaying]);
+  // -----------------------------------------------------
+  // REMOVIDO: Renovação automática da URL assinada.
+  // Motivo: Causava "glitch" de áudio (o load() reseta o buffer).
+  // O B2 já baixou o arquivo no buffer do navegador, então para
+  // o playback contínuo não é necessário renovar. Se a URL expirar
+  // (ex: usuário pausou por 30 min), o onError do player lida com isso.
+  // -----------------------------------------------------
 
   // ─────────────────────────────────────────────────────
   // CONTROLES
