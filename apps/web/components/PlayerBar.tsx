@@ -15,6 +15,7 @@ export function PlayerBar() {
     muted,
     shuffle,
     repeat,
+    isFullScreen,
     toggle,
     next,
     previous,
@@ -30,7 +31,8 @@ export function PlayerBar() {
 
   const { isAuthenticated } = useAuth();
 
-  if (!current) return null;
+  // Se não tem faixa ou se o fullscreen está aberto, esconde a barra
+  if (!current || isFullScreen) return null;
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
   const cover = current.album?.coverUrl;
@@ -43,7 +45,6 @@ export function PlayerBar() {
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-line bg-[#0f141a]/95 backdrop-blur">
-      {/* 🎧 Banner de preview */}
       {isPreview && (
         <div className="bg-gradient-to-r from-[#e7b95f] to-[#f5d58e] text-[#17120a] text-xs md:text-sm font-bold py-2 px-4 flex items-center justify-center gap-3 flex-wrap">
           <span>🎧 Você está ouvindo uma prévia de 30s</span>
@@ -58,14 +59,12 @@ export function PlayerBar() {
 
       <div className="max-w-6xl mx-auto px-4 py-3">
         <div className="flex items-center gap-4">
-          {/* Capa + título */}
           <button
             onClick={openFullScreen}
             className="flex items-center gap-3 min-w-0 flex-1 text-left hover:opacity-90 transition"
           >
             <div className="w-14 h-14 rounded-lg flex-shrink-0 overflow-hidden relative">
               {cover ? (
-                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={cover}
                   alt={current.album?.title ?? current.title}
@@ -107,12 +106,10 @@ export function PlayerBar() {
             </div>
           </button>
 
-          {/* Controles */}
           <div className="flex items-center gap-2">
             <button
               onClick={toggleShuffle}
               aria-label="Aleatório"
-              title="Aleatório"
               className={`hidden md:grid w-9 h-9 place-items-center rounded-full transition ${
                 shuffle ? 'text-gold2' : 'text-muted hover:text-text'
               }`}
@@ -171,7 +168,6 @@ export function PlayerBar() {
             <button
               onClick={cycleRepeat}
               aria-label="Repetir"
-              title="Repetir"
               className={`hidden md:grid w-9 h-9 place-items-center rounded-full transition ${
                 repeat !== 'off' ? 'text-gold2' : 'text-muted hover:text-text'
               }`}
@@ -195,7 +191,6 @@ export function PlayerBar() {
             </button>
           </div>
 
-          {/* Progresso */}
           <div className="hidden md:flex items-center gap-3 flex-1 min-w-0">
             <span className="text-xs text-muted w-10 text-right tabular-nums">
               {formatTime(currentTime)}
@@ -216,7 +211,6 @@ export function PlayerBar() {
             </span>
           </div>
 
-          {/* Volume + close */}
           <div className="hidden md:flex items-center gap-2">
             <button
               onClick={toggleMute}
