@@ -8,6 +8,9 @@ import { StorageService } from '../storage/storage.service';
 import { UploadUrlDto } from './dto/upload-url.dto';
 import { AttachMediaDto } from './dto/attach-media.dto';
 
+const MAX_UPLOAD_SIZE = 100 * 1024 * 1024; // 100 MB
+const SUPPORTED_EXTENSIONS = ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg'];
+
 @Injectable()
 export class MediaService {
   constructor(
@@ -22,15 +25,19 @@ export class MediaService {
     });
     if (!track) throw new NotFoundException('Faixa não encontrada');
 
-    // CORREÇÃO 30.1: extensionFromMime agora lança erro para MIME inválido
     const extension = this.extensionFromMime(dto.contentType);
     const key = this.buildKey(dto.type, track.slug, extension);
 
-    const url = await this.storage.getUploadUrl(key, dto.contentType);
+    // CORREÇÃO: getUploadUrl retorna { url, expiresAt }
+    const { url, expiresAt } = await this.storage.getUploadUrl(
+      key,
+      dto.contentType,
+    );
 
     return {
       url,
       key,
+      expiresAt,
       expiresInSeconds: 900,
       method: 'PUT',
       headers: { 'Content-Type': dto.contentType },
@@ -44,19 +51,18 @@ export class MediaService {
     });
     if (!track) throw new NotFoundException('Faixa não encontrada');
 
-    // CORREÇÃO 30.2: Valida se a chave recebida corresponde ao padrão
-    // esperado para esta faixa e este tipo de mídia.
-    const expectedExtension = this.extensionFromMime(
-      this.mimeFromKey(dto.key), // ou usa a extensão direta
-    );
-    
-    // A forma mais segura é reconstruir a chave esperada e comparar.
-    // Precisamos extrair a extensão da chave.
+    // CORREÇÃO: extrai a extensão direto da chave (sem mimeFromKey)
     const parts = dto.key.split('.');
     const actualExtension = parts.pop()?.toLowerCase();
-    
+
     if (!actualExtension || !/^[a-z0-9]+$/.test(actualExtension)) {
       throw new BadRequestException('Extensão de arquivo inválida.');
+    }
+
+    if (!SUPPORTED_EXTENSIONS.includes(actualExtension)) {
+      throw new BadRequestException(
+        `Extensão não suportada: ${actualExtension}`,
+      );
     }
 
     const expectedKey = this.buildKey(dto.type, track.slug, actualExtension);
@@ -67,10 +73,16 @@ export class MediaService {
       );
     }
 
-    const exists = await this.storage.objectExists(dto.key);
-    if (!exists) {
+    // CORREÇÃO: valida tamanho real do arquivo
+    const size = await this.storage.getObjectSize(dto.key);
+    if (size === null) {
       throw new BadRequestException(
         'Objeto não encontrado no storage. Faça o upload antes de anexar.',
+      );
+    }
+    if (size > MAX_UPLOAD_SIZE) {
+      throw new BadRequestException(
+        `Arquivo muito grande (${(size / 1024 / 1024).toFixed(1)} MB). Máximo: ${MAX_UPLOAD_SIZE / 1024 / 1024} MB.`,
       );
     }
 
@@ -95,6 +107,11 @@ export class MediaService {
   // ----------------------------------------------------------
 
   private buildKey(type: string, slug: string, extension: string): string {
+    // CORREÇÃO: valida o slug contra path traversal
+    if (!/^[a-z0-9-]+$/.test(slug)) {
+      throw new BadRequestException('Slug da faixa inválido.');
+    }
+
     switch (type) {
       case 'master':
         return `masters/${slug}/master.${extension}`;
@@ -138,20 +155,5 @@ export class MediaService {
       throw new BadRequestException('Formato de áudio não suportado.');
     }
     return extension;
-  }
-
-  // Helper adicionado para extrair o MIME fictício da chave
-  // (não é usado para validação real, mas para manter a consistência)
-  private mimeFromKey(key: string): string {
-    const extension = key.split('.').pop()?.toLowerCase();
-    const map: Record<string, string> = {
-      mp3: 'audio/mpeg',
-      wav: 'audio/wav',
-      flac: 'audio/flac',
-      aac: 'audio/aac',
-      m4a: 'audio/mp4',
-      ogg: 'audio/ogg',
-    };
-    return map[extension ?? ''] ?? 'application/octet-stream';
   }
 }

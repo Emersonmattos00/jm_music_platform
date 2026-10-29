@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   GetObjectCommand,
@@ -11,7 +16,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 type StorageDriver = 'b2' | 's3' | 'rustfs';
 
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(StorageService.name);
 
   private driver: StorageDriver = 'b2';
@@ -21,13 +26,19 @@ export class StorageService {
 
   private uploadExpires = 900;
   private playbackExpires = 1800;
-  private imageExpires = 31536000;
+  private imageExpires = 604800; // 7 dias (limite do SigV4)
 
   constructor(private readonly config: ConfigService) {}
 
   onModuleInit() {
     const driver = (this.config.get<string>('STORAGE_DRIVER', 'b2') ??
       'b2') as StorageDriver;
+
+    if (driver !== 'b2' && driver !== 's3' && driver !== 'rustfs') {
+      throw new Error(
+        `STORAGE_DRIVER inválido: "${driver}". Valores aceitos: b2, s3, rustfs.`,
+      );
+    }
     this.driver = driver;
 
     if (driver === 'b2') {
@@ -71,12 +82,19 @@ export class StorageService {
       this.config.get<string>('SIGNED_URL_PLAYBACK_EXPIRES', '1800'),
     );
     this.imageExpires = Number(
-      this.config.get<string>('SIGNED_URL_IMAGE_EXPIRES', '31536000'),
+      this.config.get<string>('SIGNED_URL_IMAGE_EXPIRES', '604800'),
     );
 
     this.logger.log(
       `Storage: ${this.driver.toUpperCase()} • bucket: ${this.bucket}`,
     );
+  }
+
+  async onModuleDestroy() {
+    if (this.client) {
+      this.client.destroy();
+      this.logger.log('S3Client encerrado.');
+    }
   }
 
   getDriver(): StorageDriver {
@@ -88,40 +106,61 @@ export class StorageService {
   }
 
   /**
-   * Verifica se um objeto existe no bucket configurado.
-   * Retorna false em 404/NotFound; relança outros erros.
+   * Verifica se um objeto existe no bucket.
+   * Retorna false em 404/NotFound; assume existente em 403/erro de rede
+   * (para não derrubar o playback).
    */
-async exists(key: string | null | undefined): Promise<boolean> {
-  if (!key) return false;
-  try {
-    await this.client.send(
-      new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
-    );
-    return true;
-  } catch (err: any) {
-    const status = err?.$metadata?.httpStatusCode;
-    if (
-      status === 404 ||
-      err?.name === 'NotFound' ||
-      err?.Code === 'NotFound' ||
-      err?.name === 'NoSuchKey'
-    ) {
-      return false;
+  async exists(key: string | null | undefined): Promise<boolean> {
+    if (!key) return false;
+    try {
+      await this.client.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      return true;
+    } catch (err: any) {
+      const status = err?.$metadata?.httpStatusCode;
+      if (
+        status === 404 ||
+        err?.name === 'NotFound' ||
+        err?.Code === 'NotFound' ||
+        err?.name === 'NoSuchKey'
+      ) {
+        return false;
+      }
+      this.logger.warn(
+        `Falha ao verificar ${key} (assumindo existente): ${err?.message ?? err}`,
+      );
+      return true;
     }
-    // 403/erro de credencial: loga e assume otimista para não derrubar o playback.
-    this.logger.warn(
-      `Falha ao verificar ${key} (assumindo existente): ${err?.message ?? err}`,
-    );
-    return true;
   }
-}
 
-  /**
-   * Alias de compatibilidade: media.service.ts e outros módulos
-   * chamam objectExists(). Mantém a mesma semântica de exists().
-   */
+  /** Alias de compatibilidade para chamadas existentes. */
   async objectExists(key: string | null | undefined): Promise<boolean> {
     return this.exists(key);
+  }
+
+  /**
+   * Retorna o tamanho do objeto em bytes, ou null se não existir.
+   * Usado pelo MediaService para validar uploads.
+   */
+  async getObjectSize(key: string): Promise<number | null> {
+    try {
+      const head = await this.client.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      return head.ContentLength ?? null;
+    } catch (err: any) {
+      const status = err?.$metadata?.httpStatusCode;
+      if (
+        status === 404 ||
+        err?.name === 'NotFound' ||
+        err?.Code === 'NotFound' ||
+        err?.name === 'NoSuchKey'
+      ) {
+        return null;
+      }
+      throw err;
+    }
   }
 
   async getPlaybackUrl(key: string): Promise<{ url: string; expiresAt: Date }> {
@@ -142,6 +181,9 @@ async exists(key: string | null | undefined): Promise<boolean> {
     key: string,
     contentType: string,
   ): Promise<{ url: string; expiresAt: Date }> {
+    if (!contentType) {
+      throw new Error('Content-Type é obrigatório.');
+    }
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
@@ -158,6 +200,12 @@ async exists(key: string | null | undefined): Promise<boolean> {
 
   getPublicImageUrl(key: string): string | null {
     if (!this.publicBaseUrl) return null;
-    return `${this.publicBaseUrl.replace(/\/$/, '')}/${key.replace(/^\//, '')}`;
+    const base = this.publicBaseUrl.replace(/\/$/, '');
+    const encoded = key
+      .replace(/^\//, '')
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return `${base}/${encoded}`;
   }
 }

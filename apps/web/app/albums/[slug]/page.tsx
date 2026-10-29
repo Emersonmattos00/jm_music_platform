@@ -7,7 +7,7 @@ import { api, Album, Track } from '@/lib/api';
 import { usePlayer } from '@/lib/player';
 import { useAuth } from '@/lib/auth';
 import { RentModal } from '@/components/RentModal';
-import { formatYear, formatPrice } from '@/lib/format';
+import { formatYear, formatTime } from '@/lib/format';
 
 interface AlbumDetail extends Album {
   upc: string | null;
@@ -18,7 +18,6 @@ export default function AlbumPage() {
   const params = useParams();
   const slug = typeof params.slug === 'string' ? params.slug : '';
 
-  // CORREÇÃO: Adicionado 'play' na desestruturação
   const { play, playQueue, current, isPlaying, toggle } = usePlayer();
   const { isAuthenticated } = useAuth();
 
@@ -82,14 +81,8 @@ export default function AlbumPage() {
       toggle();
       return;
     }
-
     const index = tracks.findIndex((t) => t.id === track.id);
-
-    if (index < 0) {
-      // Proteção: a faixa não pertence a este álbum.
-      return;
-    }
-
+    if (index < 0) return;
     playQueue(tracks, index);
   }
 
@@ -108,7 +101,7 @@ export default function AlbumPage() {
           ← Discografia
         </Link>
 
-        {/* Cabeçalho */}
+        {/* Cabeçalho do Álbum */}
         <div className="grid md:grid-cols-[260px_1fr] gap-8 mt-6 mb-10">
           <div className="aspect-square rounded-2xl overflow-hidden shadow-2xl">
             {album.coverUrl ? (
@@ -168,89 +161,105 @@ export default function AlbumPage() {
           </div>
         </div>
 
-        {/* Lista de faixas */}
-        <div>
-          <div className="grid grid-cols-[40px_1fr_80px_130px_140px] md:grid-cols-[40px_1fr_100px_140px_180px] gap-3 px-3 pb-3 border-b border-line text-xs uppercase tracking-wide text-muted font-bold">
-            <div>#</div>
+        {/* Lista de Faixas (estilo streaming) */}
+        <div className="flex flex-col">
+          {/* Cabeçalho (só no desktop) */}
+          <div className="hidden md:grid grid-cols-[32px_1fr_80px_80px] gap-4 px-4 py-2 border-b border-line text-xs uppercase tracking-wide text-muted font-bold mb-2">
+            <div className="text-center">#</div>
             <div>Título</div>
             <div className="text-right">Duração</div>
-            <div className="text-right">Preço</div>
-            <div className="text-right">Ações</div>
+            <div className="text-center">Ações</div>
           </div>
 
-          <div>
-            {tracks.map((track, index) => {
-              const isCurrent = current?.id === track.id;
-              const isThisPlaying = isCurrent && isPlaying;
+          {tracks.map((track, index) => {
+            const isCurrent = current?.id === track.id;
+            const isThisPlaying = isCurrent && isPlaying;
 
-              return (
-                <div
-                  key={track.id}
-                  className={`grid grid-cols-[40px_1fr_80px_130px_140px] md:grid-cols-[40px_1fr_100px_140px_180px] gap-3 px-3 py-3 rounded-lg items-center transition ${
-                    isCurrent ? 'bg-[#e7b95f10]' : 'hover:bg-[#1b2430]'
-                  }`}
-                >
-                  <div className="text-muted text-sm tabular-nums">
-                    {isThisPlaying ? (
-                      <span className="text-gold2">▶</span>
-                    ) : (
-                      String(index + 1).padStart(2, '0')
-                    )}
-                  </div>
+            return (
+              <div
+                key={track.id}
+                className={`group grid grid-cols-[32px_1fr_auto] md:grid-cols-[32px_1fr_80px_80px] gap-3 md:gap-4 px-4 py-3 rounded-lg items-center transition hover:bg-[#1b2430] ${
+                  isCurrent ? 'bg-[#e7b95f10]' : ''
+                }`}
+              >
+                {/* Número / Play no hover */}
+                <div className="text-muted text-sm tabular-nums text-center flex items-center justify-center">
+                  {isThisPlaying ? (
+                    <span className="text-gold2">▶</span>
+                  ) : (
+                    <>
+                      <span className="group-hover:hidden">
+                        {String(index + 1).padStart(2, '0')}
+                      </span>
+                      <button
+                        onClick={() => handlePlayTrack(track)}
+                        className="hidden group-hover:flex text-white hover:text-gold2 transition"
+                        aria-label="Ouvir"
+                      >
+                        ▶
+                      </button>
+                    </>
+                  )}
+                </div>
 
+                {/* Título e artista */}
+                <div className="flex flex-col min-w-0">
                   <Link
                     href={`/tracks/${track.slug}`}
-                    className={`truncate font-medium hover:underline ${
-                      isCurrent ? 'text-gold2' : ''
+                    className={`font-semibold truncate hover:underline ${
+                      isCurrent ? 'text-gold2' : 'text-text'
                     }`}
                   >
                     {track.title}
                   </Link>
-
-                  <div className="text-right text-muted text-sm tabular-nums">
-                    {track.durationSeconds
-                      ? `${Math.floor(track.durationSeconds / 60)}:${String(
-                          track.durationSeconds % 60,
-                        ).padStart(2, '0')}`
-                      : '—'}
-                  </div>
-
-                  <div className="text-right text-gold2 font-semibold text-sm whitespace-nowrap">
-                    A partir de {formatPrice(290, 'BRL')}
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      onClick={() => handlePlayTrack(track)}
-                      aria-label="Ouvir"
-                      className="w-9 h-9 grid place-items-center rounded-full border border-line hover:border-gold transition"
-                    >
-                      {isThisPlaying ? '⏸' : '▶'}
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (!isAuthenticated) {
-                          window.location.href = '/login';
-                          return;
-                        }
-                        setRentTrack(track);
-                      }}
-                      aria-label="Alugar"
-                      className="w-9 h-9 grid place-items-center rounded-full border border-line hover:border-gold transition"
-                    >
-                      🔒
-                    </button>
-                  </div>
+                  <span className="text-xs text-muted truncate">
+                    {album.artist?.name ?? 'Joseph Matthos'}
+                  </span>
                 </div>
-              );
-            })}
 
-            {tracks.length === 0 && (
-              <div className="text-center text-muted py-10 border border-dashed border-line rounded-xl mt-4">
-                Nenhuma faixa publicada neste álbum.
+                {/* Duração (só no desktop) */}
+                <div className="hidden md:block text-right text-muted text-sm tabular-nums">
+                  {track.durationSeconds
+                    ? formatTime(track.durationSeconds)
+                    : '—'}
+                </div>
+
+                {/* Ações */}
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    onClick={() => {
+                      if (!isAuthenticated) {
+                        window.location.href = '/login';
+                        return;
+                      }
+                      setRentTrack(track);
+                    }}
+                    aria-label="Alugar"
+                    className="text-muted hover:text-gold2 transition"
+                  >
+                    🔒
+                  </button>
+                  <button
+                    onClick={() => handlePlayTrack(track)}
+                    aria-label="Ouvir"
+                    className={`w-8 h-8 flex items-center justify-center rounded-full border transition ${
+                      isCurrent
+                        ? 'border-gold2 text-gold2'
+                        : 'border-transparent hover:border-line text-muted hover:text-text'
+                    }`}
+                  >
+                    {isThisPlaying ? '⏸' : '▶'}
+                  </button>
+                </div>
               </div>
-            )}
-          </div>
+            );
+          })}
+
+          {tracks.length === 0 && (
+            <div className="text-center text-muted py-10 border border-dashed border-line rounded-xl mt-4">
+              Nenhuma faixa publicada neste álbum.
+            </div>
+          )}
         </div>
       </div>
 
@@ -258,7 +267,9 @@ export default function AlbumPage() {
         <RentModal
           track={rentTrack}
           initialTab={
-            tracks.length > 0 && tracks[0].id === rentTrack.id ? 'album' : 'track'
+            tracks.length > 0 && tracks[0].id === rentTrack.id
+              ? 'album'
+              : 'track'
           }
           onClose={() => setRentTrack(null)}
           onConfirmed={() => setRentTrack(null)}
