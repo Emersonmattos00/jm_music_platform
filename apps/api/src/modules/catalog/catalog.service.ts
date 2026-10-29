@@ -215,16 +215,28 @@ export class CatalogService {
       artistId = defaultArtist.id;
     }
 
-    return this.prisma.album.create({
-      data: {
-        title: dto.title,
-        slug,
-        coverUrl: dto.coverUrl,
-        upc: normalizeUPC(dto.upc),
-        releaseDate: dto.releaseDate ? new Date(dto.releaseDate) : null,
-        artistId,
-      },
-    });
+    try {
+      return await this.prisma.album.create({
+        data: {
+          title: dto.title,
+          slug,
+          coverUrl: dto.coverUrl,
+          upc: normalizeUPC(dto.upc),
+          releaseDate: dto.releaseDate ? new Date(dto.releaseDate) : null,
+          artistId,
+        },
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Já existe um álbum com este slug. Tente novamente com outro título.',
+        );
+      }
+      throw err;
+    }
   }
 
   async updateAlbum(id: string, data: UpdateAlbumDto) {
@@ -252,18 +264,30 @@ export class CatalogService {
         : null;
     }
 
-    return this.prisma.album.update({
-      where: { id },
-      data: updateData,
-      select: {
-        id: true,
-        title: true,
-        slug: true,
-        coverUrl: true,
-        upc: true,
-        releaseDate: true,
-      },
-    });
+    try {
+      return await this.prisma.album.update({
+        where: { id },
+        data: updateData,
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          coverUrl: true,
+          upc: true,
+          releaseDate: true,
+        },
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Já existe um álbum com este slug. Tente novamente com outro título.',
+        );
+      }
+      throw err;
+    }
   }
 
   async createTrack(dto: CreateTrackDto) {
@@ -354,14 +378,22 @@ export class CatalogService {
           },
         });
       } catch (err) {
-        if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === 'P2002'
-        ) {
-          if (attempt === 0) {
-            slug = await this.generateUniqueSlug('track', dto.title);
+        if (err instanceof Prisma.PrismaClientKnownRequestError) {
+          if (err.code === 'P2003') {
+            throw new BadRequestException('Álbum ou artista não encontrado.');
           }
-          continue;
+          if (err.code === 'P2002') {
+            const meta = err.meta as { target?: string[] };
+            const target = meta?.target ?? [];
+            if (target.includes('slug')) {
+              if (attempt === 0) {
+                slug = await this.generateUniqueSlug('track', dto.title);
+              }
+              continue;
+            }
+            // Colisão de trackNumber
+            continue;
+          }
         }
         throw err;
       }
@@ -392,11 +424,23 @@ export class CatalogService {
     if (data.durationSeconds !== undefined)
       updateData.durationSeconds = data.durationSeconds;
 
-    return this.prisma.track.update({
-      where: { id },
-      data: updateData,
-      select: PUBLIC_TRACK_SELECT,
-    });
+    try {
+      return await this.prisma.track.update({
+        where: { id },
+        data: updateData,
+        select: PUBLIC_TRACK_SELECT,
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'Já existe uma faixa com este slug. Tente novamente com outro título.',
+        );
+      }
+      throw err;
+    }
   }
 
   async publishTrack(id: string) {
