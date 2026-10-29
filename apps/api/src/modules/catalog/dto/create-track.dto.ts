@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsInt,
   Min,
+  Max,
   MaxLength,
   MinLength,
   IsUUID,
@@ -44,5 +45,6 @@ export class CreateTrackDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(7200) // 2 horas (evita duração absurda)
   durationSeconds?: number;
 }

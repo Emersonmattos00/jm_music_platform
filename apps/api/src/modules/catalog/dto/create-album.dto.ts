@@ -2,6 +2,8 @@ import {
   IsString,
   IsOptional,
   IsDateString,
+  IsUrl,
+  IsUUID,
   MinLength,
   MaxLength,
 } from 'class-validator';
@@ -14,7 +16,7 @@ export class CreateAlbumDto {
   title!: string;
 
   @IsOptional()
-  @IsString()
+  @IsUrl({ protocols: ['http', 'https'], require_protocol: true })
   coverUrl?: string;
 
   @IsOptional()
@@ -22,10 +24,10 @@ export class CreateAlbumDto {
   upc?: string;
 
   @IsOptional()
-  @IsDateString()
+  @IsDateString({ strict: true })
   releaseDate?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUUID()
   artistId?: string;
 }
