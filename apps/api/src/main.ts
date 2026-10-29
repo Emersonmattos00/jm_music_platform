@@ -10,6 +10,10 @@ function normalizeOrigin(value: string): string {
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  // CORREÇÃO (Etapa 3): Permite que NestJS dispare onModuleDestroy / onApplicationShutdown.
+  // Essencial para o Fly.io fechar as conexões do Prisma/Redis corretamente nos deploys.
+  app.enableShutdownHooks();
+
   app.setGlobalPrefix('v1');
   app.use(cookieParser());
 
