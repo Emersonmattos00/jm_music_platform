@@ -28,7 +28,7 @@ export class PaymentsService {
   ) {}
 
   // ----------------------------------------------------------
-  // CRIAR CHECKOUT DE ASSINATURA (com idempotência)
+  // CHECKOUT DE ASSINATURA
   // ----------------------------------------------------------
   async createSubscriptionCheckout(userId: string, planId: string) {
     const user = await this.prisma.user.findUnique({
@@ -46,6 +46,16 @@ export class PaymentsService {
 
     if (plan.priceCents === 0) {
       throw new BadRequestException('Plano gratuito não requer checkout');
+    }
+
+    // CORREÇÃO 46.11: valida periodicidade antes de chamar o MP
+    if (plan.intervalUnit === 'year' && plan.intervalCount > 1) {
+      throw new BadRequestException(
+        'Planos anuais com mais de 1 ano não são suportados.',
+      );
+    }
+    if (plan.intervalCount < 1) {
+      throw new BadRequestException('Intervalo do plano inválido.');
     }
 
     // Idempotência: reutiliza checkout PENDING recente
@@ -80,12 +90,6 @@ export class PaymentsService {
       };
     }
 
-    // Cancela pendentes antigas
-    await this.prisma.subscription.updateMany({
-      where: { userId, status: SubscriptionStatus.PENDING },
-      data: { status: SubscriptionStatus.CANCELLED },
-    });
-
     const externalReference = `sub-${user.id}-${plan.id}-${Date.now()}`;
     const appUrl = this.config.getOrThrow<string>('APP_URL');
 
@@ -93,6 +97,7 @@ export class PaymentsService {
     const testBuyerEmail = this.config.get<string>('MP_TEST_BUYER_EMAIL');
     const payerEmail = isDev && testBuyerEmail ? testBuyerEmail : user.email;
 
+    // CORREÇÃO 46.12: cria o checkout novo ANTES de cancelar o antigo
     const preapproval = await this.mp.createPreapproval({
       reason: `JM Music — ${plan.name}`,
       externalReference,
@@ -106,6 +111,19 @@ export class PaymentsService {
 
     const initPoint =
       preapproval.init_point ?? preapproval.sandbox_init_point ?? null;
+
+    // CORREÇÃO 46.13: valida retorno do MP antes de salvar
+    if (!preapproval.id || !initPoint) {
+      throw new ServiceUnavailableException(
+        'Mercado Pago não retornou um link de pagamento válido. Tente novamente.',
+      );
+    }
+
+    // Só agora cancela as PENDING antigas
+    await this.prisma.subscription.updateMany({
+      where: { userId, status: SubscriptionStatus.PENDING },
+      data: { status: SubscriptionStatus.CANCELLED },
+    });
 
     const subscription = await this.prisma.subscription.create({
       data: {
@@ -140,7 +158,7 @@ export class PaymentsService {
   }
 
   // ----------------------------------------------------------
-  // CRIAR CHECKOUT DE ALUGUEL
+  // CHECKOUT DE ALUGUEL
   // ----------------------------------------------------------
   async createRentalCheckout(userId: string, orderId: string) {
     const order = await this.prisma.order.findUnique({
@@ -200,7 +218,7 @@ export class PaymentsService {
   }
 
   // ----------------------------------------------------------
-  // STATUS DE UMA ASSINATURA (polling)
+  // STATUS / CANCELAR / MINHA ASSINATURA
   // ----------------------------------------------------------
   async getSubscriptionStatus(userId: string, subscriptionId: string) {
     const sub = await this.prisma.subscription.findUnique({
@@ -253,9 +271,6 @@ export class PaymentsService {
     });
   }
 
-  // ----------------------------------------------------------
-  // CANCELAR ASSINATURA
-  // ----------------------------------------------------------
   async cancelSubscription(userId: string, subscriptionId: string) {
     const sub = await this.prisma.subscription.findUnique({
       where: { id: subscriptionId },
@@ -291,9 +306,6 @@ export class PaymentsService {
     return updated;
   }
 
-  // ----------------------------------------------------------
-  // MINHA ASSINATURA ATUAL
-  // ----------------------------------------------------------
   async getMySubscription(userId: string) {
     return this.prisma.subscription.findFirst({
       where: {
