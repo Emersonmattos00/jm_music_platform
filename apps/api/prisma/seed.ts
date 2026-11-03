@@ -1,5 +1,5 @@
 import { PrismaClient, UserRole, TrackStatus } from '@prisma/client';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
@@ -46,6 +46,8 @@ const ALBUMS: Array<{
   { title: 'Contraditório',             slug: 'contraditorio',             cover: 'contraditorio.webp',      releaseDate: '2027-03-01', genre: 'Hip Hop',      mood: 'Reflexivo' },
   { title: 'Mundo Atual',               slug: 'mundo-atual',               cover: 'mundoatual.webp',         releaseDate: '2027-03-15', genre: 'Hip Hop',      mood: 'Crítico' },
   { title: 'Tornado da Arte',           slug: 'tornado-da-arte',           cover: 'tornadodaarte.webp',      releaseDate: '2027-04-01', genre: 'Hip Hop',      mood: 'Intenso' },
+  { title: 'Tempo Indomável',           slug: 'tempo-indomavel',           cover: 'tempoindomavel.webp',     releaseDate: '2027-04-15', genre: 'Hip Hop',      mood: 'Intenso' }, // Adicionado de volta
+  { title: 'A Lógica da Consciência',   slug: 'a-logica-da-consciencia',   cover: 'alogicadaconsciencia.webp', releaseDate: '2027-04-20',  genre: 'Hip Hop',   mood: 'Filosófico', },
 ];
 
 const AINDA_DA_TEMPO_SLUG = 'ainda-da-tempo';
@@ -143,14 +145,14 @@ async function main() {
   const admin = await prisma.user.upsert({
     where: { email: 'joseph@jmmusic.com' },
     update: {
-      emailVerified: new Date(), // 🆕
+      emailVerified: new Date(),
     },
     create: {
       email: 'joseph@jmmusic.com',
       name: 'Joseph Matthos',
       passwordHash: adminPassword,
       role: UserRole.ADMIN,
-      emailVerified: new Date(), // 🆕
+      emailVerified: new Date(),
     },
   });
   console.log(`👤 Admin: ${admin.email}`);
@@ -291,7 +293,7 @@ async function main() {
   console.log(`📄 Produtos de aluguel: ${productTotal}`);
 
   // ══════════════════════════════════════════════════════════
-  // 5. PLANOS DE ASSINATURA (versão final)
+  // 5. PLANOS DE ASSINATURA
   // ══════════════════════════════════════════════════════════
 
   // Desativa todos os planos antigos (não deleta — preserva assinaturas)
