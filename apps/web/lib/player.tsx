@@ -80,7 +80,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // ─────────────────────────────────────────────────────
   // CARREGAR FAIXA
   // ─────────────────────────────────────────────────────
-  const loadTrack = useCallback(async (track: Track) => {
+    const loadTrack = useCallback(async (track: Track) => {
     const requestId = ++requestIdRef.current;
 
     setError(null);
@@ -94,7 +94,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     try {
       const info = await api.authorize(track.id);
 
-      // Descarta respostas de seleções anteriores (race condition).
       if (requestId !== requestIdRef.current) return;
 
       setPlaybackInfo(info);
@@ -111,11 +110,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       try {
         await a.play();
-
-        // Se outra faixa foi selecionada enquanto o play() rodava, pausa.
-        if (requestId !== requestIdRef.current) {
-          a.pause();
-        }
       } catch {
         if (requestId === requestIdRef.current) {
           setError(
@@ -141,6 +135,26 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }
     }
   }, []);
+
+  const play = useCallback(
+    async (track: Track, context?: Track[]) => {
+      const nextQueue =
+        context && context.length > 0
+          ? context
+          : [track];
+
+      const normalizedQueue = nextQueue.some(
+        (item) => item.id === track.id
+      )
+        ? nextQueue
+        : [track, ...nextQueue];
+
+      setQueue(normalizedQueue);
+      setCurrent(track);
+      await loadTrack(track);
+    },
+    [loadTrack],
+  );
 
   // ─────────────────────────────────────────────────────
   // PLAY

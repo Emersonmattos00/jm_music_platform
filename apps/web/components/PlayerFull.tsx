@@ -40,23 +40,23 @@ export function PlayerFull() {
 
   return (
     <div className="fixed inset-0 z-[9999] bg-[#0c1015] flex flex-col overflow-hidden">
-      {/* Fundo com a capa do álbum (marca d'água) - Opacidade baixa mas visível */}
+      {/* Fundo com a capa do álbum (marca d'água) */}
       {cover && (
         <div
-          className="absolute inset-0 bg-cover bg-center opacity-20 scale-110 pointer-events-none"
+          className="absolute inset-0 bg-cover bg-center opacity-30 scale-105 pointer-events-none"
           style={{ backgroundImage: `url(${cover})` }}
         />
       )}
       <div className="absolute inset-0 bg-gradient-to-b from-[#0c1015]/60 via-[#0c1015]/90 to-[#0c1015] pointer-events-none" />
 
-      {/* Conteúdo principal (Garantindo clique com pointer-events-auto) */}
+      {/* Conteúdo principal */}
       <div className="relative z-10 flex flex-col h-full p-6 overflow-y-auto pointer-events-auto">
         
         {/* Topo: Tabs e Fechar */}
         <div className="flex justify-between items-center mb-8">
           <div className="flex gap-6 text-sm font-bold uppercase tracking-wider">
             <button className="text-gold2 border-b-2 border-gold2 pb-1">Tocando</button>
-            <button className="text-muted hover:text-text transition">A seguir (5)</button>
+            <button className="text-muted hover:text-text transition">A seguir</button>
           </div>
           <button
             onClick={closeFullScreen}
@@ -104,12 +104,16 @@ export function PlayerFull() {
             style={{ background: `linear-gradient(to right, #e7b95f ${progressPercent}%, #333 ${progressPercent}%)` }}
           />
           <div className="flex justify-between text-xs text-muted mt-2 font-mono">
-            <span>{Math.floor(currentTime / 60)}:${String(Math.floor(currentTime % 60)).padStart(2, '0')}</span>
-            <span>{Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')}</span>
+            <span>
+              {Math.floor(currentTime / 60)}:{String(Math.floor(currentTime % 60)).padStart(2, '0')}
+            </span>
+            <span>
+              {Math.floor(duration / 60)}:{String(Math.floor(duration % 60)).padStart(2, '0')}
+            </span>
           </div>
         </div>
 
-        {/* Controles de Reprodução (Estilo Spotify) */}
+        {/* Controles de Reprodução (SVG) */}
         <div className="flex items-center justify-center gap-6 md:gap-8 mb-10">
           <button onClick={toggleShuffle} className={`transition ${shuffle ? 'text-gold2' : 'text-muted hover:text-white'}`} aria-label="Aleatório">
             <svg viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
