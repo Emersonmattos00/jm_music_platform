@@ -94,7 +94,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     try {
       const info = await api.authorize(track.id);
 
-      // Descarta respostas de seleções anteriores (race condition).
       if (requestId !== requestIdRef.current) return;
 
       setPlaybackInfo(info);
@@ -111,11 +110,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       try {
         await a.play();
-
-        // Se outra faixa foi selecionada enquanto o play() rodava, pausa.
-        if (requestId !== requestIdRef.current) {
-          a.pause();
-        }
       } catch {
         if (requestId === requestIdRef.current) {
           setError(
@@ -147,21 +141,22 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // ─────────────────────────────────────────────────────
   const play = useCallback(
     async (track: Track, context?: Track[]) => {
+      const nextQueue =
+        context && context.length > 0
+          ? context
+          : [track];
+
+      const normalizedQueue = nextQueue.some(
+        (item) => item.id === track.id
+      )
+        ? nextQueue
+        : [track, ...nextQueue];
+
+      setQueue(normalizedQueue);
       setCurrent(track);
-      if (context) setQueue(context);
       await loadTrack(track);
     },
     [loadTrack],
-  );
-
-  const playQueue = useCallback(
-    async (tracks: Track[], startIndex = 0) => {
-      if (tracks.length === 0) return;
-      const index = Math.max(0, Math.min(startIndex, tracks.length - 1));
-      setQueue(tracks);
-      await play(tracks[index], tracks);
-    },
-    [play],
   );
 
   // ─────────────────────────────────────────────────────
@@ -216,7 +211,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!a) return;
 
     if (playbackInfo?.isPreview) {
-      // CORREÇÃO: Reseta o tempo para o próximo play começar do zero
+      // Reseta o tempo para o próximo play começar do zero
       a.currentTime = 0;
       setIsPlaying(false);
       return;
@@ -303,14 +298,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     a.volume = muted ? 0 : volume;
   }, [volume, muted]);
 
-  // -----------------------------------------------------
-  // REMOVIDO: Renovação automática da URL assinada.
-  // Motivo: Causava "glitch" de áudio (o load() reseta o buffer).
-  // O B2 já baixou o arquivo no buffer do navegador, então para
-  // o playback contínuo não é necessário renovar. Se a URL expirar
-  // (ex: usuário pausou por 30 min), o onError do player lida com isso.
-  // -----------------------------------------------------
-
   // ─────────────────────────────────────────────────────
   // CONTROLES
   // ─────────────────────────────────────────────────────
@@ -361,6 +348,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setCurrentTime(0);
     setDuration(0);
   }, []);
+
+  const playQueue = useCallback(
+    async (tracks: Track[], startIndex = 0) => {
+      if (tracks.length === 0) return;
+      const index = Math.max(0, Math.min(startIndex, tracks.length - 1));
+      setQueue(tracks);
+      setCurrent(tracks[index]);
+      await loadTrack(tracks[index]);
+    },
+    [loadTrack],
+  );
 
   const isPreview = playbackInfo?.isPreview === true;
 
