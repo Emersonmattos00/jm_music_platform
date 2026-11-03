@@ -1,12 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { usePlayer } from '@/lib/player';
 import { RentModal } from '@/components/RentModal';
 
 export function PlayerFull() {
-  const router = useRouter();
   const {
     current,
     isPlaying,
@@ -32,19 +30,27 @@ export function PlayerFull() {
   const cover = current.album?.coverUrl;
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  // Função para fechar e navegar de forma forçada (bypass do router do Next)
+  const goToPlans = () => {
+    closeFullScreen();
+    setTimeout(() => {
+      window.location.href = '/plans';
+    }, 100);
+  };
+
   return (
-    <div className="fixed inset-0 z-[999] bg-[#0c1015] flex flex-col overflow-hidden">
-      {/* Fundo com a capa do álbum (marca d'água) */}
+    <div className="fixed inset-0 z-[9999] bg-[#0c1015] flex flex-col overflow-hidden">
+      {/* Fundo com a capa do álbum (marca d'água) - Opacidade baixa mas visível */}
       {cover && (
         <div
-          className="absolute inset-0 bg-cover bg-center opacity-30 scale-105 pointer-events-none"
+          className="absolute inset-0 bg-cover bg-center opacity-20 scale-110 pointer-events-none"
           style={{ backgroundImage: `url(${cover})` }}
         />
       )}
-      <div className="absolute inset-0 bg-gradient-to-b from-[#0c1015]/40 via-[#0c1015]/80 to-[#0c1015] pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-b from-[#0c1015]/60 via-[#0c1015]/90 to-[#0c1015] pointer-events-none" />
 
-      {/* Conteúdo principal (z-10 para ficar acima do fundo) */}
-      <div className="relative z-10 flex flex-col h-full p-6 overflow-y-auto">
+      {/* Conteúdo principal (Garantindo clique com pointer-events-auto) */}
+      <div className="relative z-10 flex flex-col h-full p-6 overflow-y-auto pointer-events-auto">
         
         {/* Topo: Tabs e Fechar */}
         <div className="flex justify-between items-center mb-8">
@@ -54,8 +60,9 @@ export function PlayerFull() {
           </div>
           <button
             onClick={closeFullScreen}
-            className="text-muted hover:text-white text-3xl transition p-2 cursor-pointer"
+            className="text-muted hover:text-white text-3xl transition p-2 cursor-pointer z-50"
             aria-label="Fechar player"
+            type="button"
           >
             ✕
           </button>
@@ -134,20 +141,18 @@ export function PlayerFull() {
         </div>
 
         {/* Botões de Ação (Alugar + Assinar) */}
-        <div className="w-full max-w-md mx-auto mt-auto pb-6 flex gap-3">
+        <div className="w-full max-w-md mx-auto mt-auto pb-6 flex gap-3 relative z-50">
           <button
             onClick={() => setIsRentModalOpen(true)}
-            className="flex-1 py-4 rounded-full font-bold text-sm md:text-base border-2 border-gold text-gold2 hover:bg-[#e7b95f15] transition flex items-center justify-center gap-2"
+            type="button"
+            className="flex-1 py-4 rounded-full font-bold text-sm md:text-base border-2 border-gold text-gold2 hover:bg-[#e7b95f15] transition flex items-center justify-center gap-2 cursor-pointer"
           >
             🔒 Alugar
           </button>
           <button
-            onClick={() => {
-              closeFullScreen();
-              // Pequeno delay para garantir que o player feche antes de navegar
-              setTimeout(() => router.push('/plans'), 100);
-            }}
-            className="flex-1 py-4 rounded-full font-bold text-sm md:text-base bg-gold text-[#16130c] hover:bg-gold2 transition flex items-center justify-center gap-2"
+            onClick={goToPlans}
+            type="button"
+            className="flex-1 py-4 rounded-full font-bold text-sm md:text-base bg-gold text-[#16130c] hover:bg-gold2 transition flex items-center justify-center gap-2 cursor-pointer"
           >
             💎 Assinar PRO
           </button>
