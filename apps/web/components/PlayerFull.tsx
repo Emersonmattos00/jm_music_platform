@@ -22,7 +22,7 @@ export function PlayerFull() {
     isPreview,
     shuffle,
     repeat,
-    play, // Importante para tocar a música da fila
+    play, // Necessário para a listagem
   } = usePlayer();
 
   const [isRentModalOpen, setIsRentModalOpen] = useState(false);
@@ -40,7 +40,7 @@ export function PlayerFull() {
     }, 100);
   };
 
-  // Filtra a fila para mostrar apenas as próximas músicas (excluindo a atual)
+  // Filtra a fila para mostrar apenas as próximas músicas
   const nextTracks = queue.filter((t) => t.id !== current.id);
 
   return (
@@ -54,7 +54,7 @@ export function PlayerFull() {
       )}
       <div className="absolute inset-0 bg-gradient-to-b from-[#0c1015]/60 via-[#0c1015]/90 to-[#0c1015] pointer-events-none" />
 
-      {/* Conteúdo principal (z-10 para ficar acima do fundo) */}
+      {/* Conteúdo principal */}
       <div className="relative z-10 flex flex-col h-full p-4 sm:p-8 pointer-events-auto">
         
         {/* Topo: Tabs e Fechar */}
@@ -87,12 +87,12 @@ export function PlayerFull() {
           </button>
         </div>
 
-        {/* Área Central: Muda de acordo com a aba selecionada */}
-        <div className="flex-1 flex flex-col md:flex-row items-center justify-center gap-6 md:gap-16 w-full max-w-5xl mx-auto min-h-0 overflow-hidden">
+        {/* Área Central */}
+        <div className="flex-1 flex flex-col items-center justify-center w-full max-w-5xl mx-auto min-h-0">
           
           {activeTab === 'playing' ? (
             // ================= TELA TOCANDO =================
-            <>
+            <div className="flex flex-col md:flex-row items-center justify-center gap-6 md:gap-16 w-full">
               {/* Capa do Álbum */}
               <div className="w-full max-w-[200px] sm:max-w-[280px] md:max-w-[400px] aspect-square rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl flex-shrink-0">
                 {cover ? (
@@ -163,40 +163,44 @@ export function PlayerFull() {
                   </button>
                 </div>
               </div>
-            </>
+            </div>
           ) : (
             // ================= TELA A SEGUIR =================
-            <div className="w-full h-full max-w-3xl mx-auto overflow-y-auto pr-2">
-              <h3 className="text-xl font-bold mb-4 text-white">Próximas músicas</h3>
-              {nextTracks.length === 0 ? (
-                <p className="text-muted">Nenhuma música na fila.</p>
-              ) : (
-                <div className="space-y-2">
-                  {nextTracks.map((track, index) => (
-                    <div
-                      key={track.id}
-                      onClick={() => play(track, queue)}
-                      className="flex items-center gap-4 p-3 rounded-lg hover:bg-white/5 cursor-pointer transition group"
-                    >
-                      <span className="text-muted font-mono w-6 text-center">{String(index + 1).padStart(2, '0')}</span>
-                      <div className="w-12 h-12 rounded overflow-hidden flex-shrink-0">
-                        {track.album?.coverUrl ? (
-                          <img src={track.album.coverUrl} alt={track.title} className="w-full h-full object-cover" />
-                        ) : (
-                          <div className="w-full h-full bg-gray-700" />
-                        )}
+            <div className="w-full h-full max-w-3xl mx-auto flex flex-col">
+              <h3 className="text-xl font-bold mb-4 text-white flex-shrink-0">Próximas músicas</h3>
+              
+              {/* LISTA COM ROLAGEM APENAS AQUI E SEM BARRA DE ROLAGEM VISÍVEL */}
+              <div className="flex-1 overflow-y-auto pr-2 pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {nextTracks.length === 0 ? (
+                  <p className="text-muted">Nenhuma música na fila.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {nextTracks.map((track, index) => (
+                      <div
+                        key={track.id}
+                        onClick={() => play(track, queue)} // <--- AQUI: O clique na linha toca a música
+                        className="flex items-center gap-4 p-3 rounded-lg hover:bg-white/5 cursor-pointer transition group"
+                      >
+                        <span className="text-muted font-mono w-6 text-center">{String(index + 1).padStart(2, '0')}</span>
+                        <div className="w-12 h-12 rounded overflow-hidden flex-shrink-0">
+                          {track.album?.coverUrl ? (
+                            <img src={track.album.coverUrl} alt={track.title} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full bg-gray-700" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-white truncate">{track.title}</p>
+                          <p className="text-xs text-muted truncate">{track.artist?.name ?? 'Joseph Matthos'}</p>
+                        </div>
+                        <div className="text-muted group-hover:text-gold2 transition">
+                          <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M8 5v14l11-7z"/></svg>
+                        </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-white truncate">{track.title}</p>
-                        <p className="text-xs text-muted truncate">{track.artist?.name ?? 'Joseph Matthos'}</p>
-                      </div>
-                      <div className="text-muted group-hover:text-gold2 transition">
-                        <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6"><path d="M8 5v14l11-7z"/></svg>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
